@@ -1,24 +1,26 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 import httpx
 import logging
-import json
-import asyncio
 import os
 import shutil
 import uuid
-from typing import AsyncGenerator, Optional, List, Dict, Any
-import tempfile
-from dataclasses import dataclass
-from enum import Enum
-import docx2txt  # Alternatif untuk python-docx, lebih mudah diinstal
-# Alternatif untuk PyPDF2 yang pure Python
-import PyPDF4  # Library pure Python untuk PDF
-import hashlib
-from datetime import datetime, timedelta
 import time
+import hashlib
+import docx2txt  # For basic DOCX processing
+import PyPDF4   # For PDF processing
+import time
+import base64
+import io
+from docx import Document  # For advanced DOCX processing
+from PIL import Image
+import fitz  # PyMuPDF for better PDF processing
+import magic  # For file type detection
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -51,13 +53,6 @@ class DocumentResponse(BaseModel):
     filename: str
 
 # AI Model Configuration System
-class ModelType(Enum):
-    LLAMA3_8B = "llama3:8b"
-    LLAMA3_LATEST = "llama3:latest"
-    LLAMA3_70B = "llama3:70b"
-    MISTRAL = "mistral:latest"
-    CODELLAMA = "codellama:latest"
-
 @dataclass
 class ModelConfig:
     model_name: str
@@ -133,68 +128,6 @@ class AIModelOptimizer:
 
 # Initialize optimizer
 ai_optimizer = AIModelOptimizer()
-
-async def stream_response(response: httpx.Response) -> AsyncGenerator[bytes, None]:
-    try:
-        logger.info("Starting to stream response...")
-        
-        full_response = ""
-        last_sent_length = 0
-        loop_detected = False
-        
-        # Process the response line by line
-        async for line in response.aiter_lines():
-            if not line:
-                continue
-                
-            try:
-                data = json.loads(line)
-                
-                # If this is a response chunk, process it properly
-                if "response" in data:
-                    chunk = data["response"]
-                    if chunk.strip():  # Only process non-empty responses
-                        full_response += chunk
-                        
-                        # Check for loops in the accumulated response
-                        if response_monitor.is_response_looping(full_response):
-                            logger.warning("Loop detected in response, stopping generation")
-                            loop_detected = True
-                            # Send error message
-                            yield json.dumps({
-                                "error": "Response loop detected. Please try again with a different question."
-                            }).encode() + b"\n"
-                            break
-                        
-                        # Only send new content (not the full accumulated response)
-                        new_content = full_response[last_sent_length:]
-                        if new_content.strip():
-                            yield json.dumps({"response": new_content}).encode() + b"\n"
-                            last_sent_length = len(full_response)
-                
-                # If this is an error, report it
-                elif "error" in data:
-                    logger.error(f"Ollama error: {data['error']}")
-                    yield json.dumps({"error": data['error']}).encode() + b"\n"
-                    
-                # If this is a completion signal, log it
-                elif "done" in data and data.get("done"):
-                    if not loop_detected:
-                        # Clean the final response
-                        cleaned_response = response_monitor.clean_response(full_response)
-                        if cleaned_response != full_response:
-                            logger.info("Response was cleaned for quality")
-                        logger.info("Response generation complete")
-                        logger.info(f"Total response length: {len(full_response)} characters")
-                    break
-                    
-            except json.JSONDecodeError as e:
-                logger.warning(f"JSON decode error: {e}")
-                continue
-                
-    except Exception as e:
-        logger.error(f"Error in stream_response: {e}")
-        yield json.dumps({"error": str(e)}).encode() + b"\n"
 
 @app.post("/api/chat")
 async def chat_with_llama(request: ChatRequest):
@@ -273,14 +206,6 @@ async def chat_with_llama(request: ChatRequest):
                 }
             })
         
-        # Update model activity and check if reload needed
-        preload_start = time.time()
-        model_preloader.update_activity()
-        if model_preloader.should_reload():
-            await model_preloader.preload_model("llama3:8b")
-        preload_time = (time.time() - preload_start) * 1000
-        logger.info(f"⚡ [TIMING] Model preload check: {preload_time:.2f}ms")
-        
         # Prepare request payload
         payload_start = time.time()
         
@@ -290,7 +215,6 @@ async def chat_with_llama(request: ChatRequest):
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             # Get optimized payload
             request_payload = ai_optimizer.get_optimized_payload(optimized_prompt)
-            request_payload = ollama_optimizer.get_optimized_payload(request_payload)
             
             payload_time = (time.time() - payload_start) * 1000
             logger.info(f"⚡ [TIMING] Payload preparation: {payload_time:.2f}ms")
@@ -354,17 +278,15 @@ async def chat_with_llama(request: ChatRequest):
                 processing_time = (time.time() - processing_start) * 1000
                 total_time = (time.time() - start_time) * 1000
                 
-                # Add performance monitoring
-                perf_status = performance_monitor.get_performance_status()
+                # Add simple performance monitoring
+                perf_status = performance_monitor.get_simple_status()
                 
                 logger.info(f"⚡ [TIMING] Response processing: {processing_time:.2f}ms")
                 logger.info(f"🎯 [TIMING] TOTAL REQUEST TIME: {total_time:.2f}ms ({total_time/1000:.2f}s)")
-                logger.info(f"📊 [PERFORMANCE] Status: {perf_status['status']} - {perf_status['message']}")
+                logger.info(f"📊 [PERFORMANCE] Status: {perf_status}")
                 
-                if perf_status['status'] in ['slow', 'very_slow']:
+                if perf_status in ['slow', 'very_slow']:
                     logger.warning("🐌 [PERFORMANCE] Slow response detected!")
-                    for rec in perf_status['recommendations']:
-                        logger.warning(f"💡 [RECOMMENDATION] {rec}")
                 
                 logger.info(f"Final cleaned response length: {len(cleaned_response)} characters")
                 
@@ -380,7 +302,6 @@ async def chat_with_llama(request: ChatRequest):
                         "breakdown": {
                             "prompt_engineering": prompt_time,
                             "cache_check": cache_time,
-                            "preload_check": preload_time,
                             "payload_prep": payload_time,
                             "ollama_request": ollama_time,
                             "response_processing": processing_time
@@ -421,23 +342,175 @@ async def chat_with_llama(request: ChatRequest):
         raise HTTPException(status_code=500, detail=error_msg)
 
 async def extract_text_from_document(file_path: str) -> str:
-    """Ekstrak teks dari file dokumen (PDF atau DOCX)."""
+    """Ekstrak teks dan deskripsi konten dari file dokumen (PDF atau DOCX) dengan support gambar."""
     try:
         # Log untuk debugging
         logger.info(f"Extracting text from document: {file_path}")
-        file_extension = os.path.splitext(file_path)[1].lower()
-        logger.info(f"File extension: {file_extension}")
         
-        if file_extension == '.pdf':
-            return extract_text_from_pdf(file_path)
-        elif file_extension == '.docx':
-            return extract_text_from_docx(file_path)
+        # Deteksi tipe file dengan python-magic untuk akurasi lebih baik
+        try:
+            file_type = magic.from_file(file_path, mime=True)
+            logger.info(f"Detected MIME type: {file_type}")
+        except:
+            # Fallback ke ekstensi file
+            file_extension = os.path.splitext(file_path)[1].lower()
+            logger.info(f"Fallback to file extension: {file_extension}")
+            file_type = None
+        
+        file_extension = os.path.splitext(file_path)[1].lower()
+        
+        if file_extension == '.pdf' or (file_type and 'pdf' in file_type):
+            return await extract_text_from_pdf_advanced(file_path)
+        elif file_extension == '.docx' or (file_type and 'wordprocessingml' in file_type):
+            return await extract_text_from_docx_advanced(file_path)
         else:
             logger.error(f"Format file tidak didukung: {file_extension}")
-            return "Format file tidak didukung."
+            return f"Format file tidak didukung: {file_extension}"
     except Exception as e:
         logger.error(f"Error saat mengekstrak teks dari dokumen: {e}", exc_info=True)
         return f"Error saat mengekstrak teks: {str(e)}"
+
+async def extract_text_from_docx_advanced(file_path: str) -> str:
+    """Ekstrak teks dari file DOCX dengan support lengkap untuk semua elemen."""
+    try:
+        logger.info("Starting advanced DOCX extraction...")
+        
+        # Gunakan python-docx untuk ekstraksi yang lebih lengkap
+        doc = Document(file_path)
+        
+        extracted_content = []
+        image_count = 0
+        table_count = 0
+        
+        # Header
+        extracted_content.append("=== DOKUMEN WORD ===\n")
+        
+        # Ekstrak paragraf dengan formatting info
+        for i, paragraph in enumerate(doc.paragraphs):
+            text = paragraph.text.strip()
+            if text:
+                # Deteksi style/heading
+                if paragraph.style.name.startswith('Heading'):
+                    extracted_content.append(f"\n## {text}")
+                elif paragraph.style.name == 'Title':
+                    extracted_content.append(f"\n# {text}")
+                else:
+                    extracted_content.append(text)
+        
+        # Ekstrak tabel
+        for table_idx, table in enumerate(doc.tables):
+            table_count += 1
+            extracted_content.append(f"\n[TABEL {table_count}]")
+            
+            for row_idx, row in enumerate(table.rows):
+                row_data = []
+                for cell in row.cells:
+                    cell_text = cell.text.strip().replace('\n', ' ')
+                    row_data.append(cell_text)
+                
+                if any(row_data):  # Hanya tambahkan jika ada data
+                    extracted_content.append(" | ".join(row_data))
+        
+        # Ekstrak gambar dan beri deskripsi
+        for rel in doc.part.rels.values():
+            if "image" in rel.target_ref:
+                image_count += 1
+                extracted_content.append(f"\n[GAMBAR {image_count}] - Gambar ditemukan dalam dokumen")
+        
+        # Ekstrak properties dokumen
+        if doc.core_properties.title:
+            extracted_content.insert(1, f"Judul: {doc.core_properties.title}")
+        if doc.core_properties.author:
+            extracted_content.insert(2, f"Penulis: {doc.core_properties.author}")
+        if doc.core_properties.subject:
+            extracted_content.insert(3, f"Subjek: {doc.core_properties.subject}")
+        
+        # Tambahkan ringkasan konten
+        summary = f"\n=== RINGKASAN DOKUMEN ===\n"
+        summary += f"- Total paragraf: {len([p for p in doc.paragraphs if p.text.strip()])}\n"
+        summary += f"- Total tabel: {table_count}\n"
+        summary += f"- Total gambar: {image_count}\n"
+        
+        extracted_content.append(summary)
+        
+        result = "\n".join(extracted_content)
+        logger.info(f"Advanced DOCX extraction completed: {len(result)} characters")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error dalam ekstraksi DOCX advanced: {e}")
+        # Fallback ke docx2txt
+        try:
+            logger.info("Falling back to basic docx2txt extraction...")
+            text = docx2txt.process(file_path)
+            return f"=== DOKUMEN WORD (MODE SEDERHANA) ===\n{text}"
+        except Exception as fallback_error:
+            logger.error(f"Fallback juga gagal: {fallback_error}")
+            return f"Error saat membaca DOCX: {str(e)}"
+
+async def extract_text_from_pdf_advanced(file_path: str) -> str:
+    """Ekstrak teks dari file PDF dengan PyMuPDF untuk hasil yang lebih baik."""
+    try:
+        logger.info("Starting advanced PDF extraction with PyMuPDF...")
+        
+        # Buka PDF dengan PyMuPDF
+        pdf_document = fitz.open(file_path)
+        extracted_content = []
+        total_images = 0
+        
+        # Header
+        extracted_content.append("=== DOKUMEN PDF ===\n")
+        
+        # Ekstrak metadata
+        metadata = pdf_document.metadata
+        if metadata.get('title'):
+            extracted_content.append(f"Judul: {metadata['title']}")
+        if metadata.get('author'):
+            extracted_content.append(f"Penulis: {metadata['author']}")
+        if metadata.get('subject'):
+            extracted_content.append(f"Subjek: {metadata['subject']}")
+        
+        extracted_content.append(f"Total halaman: {len(pdf_document)}\n")
+        
+        # Ekstrak teks per halaman
+        for page_num in range(len(pdf_document)):
+            page = pdf_document[page_num]
+            
+            # Ekstrak teks
+            text = page.get_text()
+            if text.strip():
+                extracted_content.append(f"\n--- HALAMAN {page_num + 1} ---")
+                extracted_content.append(text.strip())
+            
+            # Hitung gambar di halaman ini
+            image_list = page.get_images()
+            if image_list:
+                page_images = len(image_list)
+                total_images += page_images
+                extracted_content.append(f"[{page_images} gambar ditemukan di halaman {page_num + 1}]")
+        
+        # Tambahkan ringkasan
+        summary = f"\n=== RINGKASAN PDF ===\n"
+        summary += f"- Total halaman: {len(pdf_document)}\n"
+        summary += f"- Total gambar: {total_images}\n"
+        
+        extracted_content.append(summary)
+        
+        pdf_document.close()
+        
+        result = "\n".join(extracted_content)
+        logger.info(f"Advanced PDF extraction completed: {len(result)} characters")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error dalam ekstraksi PDF advanced: {e}")
+        # Fallback ke PyPDF4
+        try:
+            logger.info("Falling back to PyPDF4 extraction...")
+            return extract_text_from_pdf(file_path)
+        except Exception as fallback_error:
+            logger.error(f"Fallback PDF juga gagal: {fallback_error}")
+            return f"Error saat membaca PDF: {str(e)}"
 
 def extract_text_from_pdf(file_path: str) -> str:
     """Ekstrak teks dari file PDF."""
@@ -455,10 +528,10 @@ def extract_text_from_pdf(file_path: str) -> str:
         return f"Error saat membaca PDF: {str(e)}"
 
 def extract_text_from_docx(file_path: str) -> str:
-    """Ekstrak teks dari file DOCX."""
+    """Ekstrak teks dari file DOCX (fungsi fallback sederhana)."""
     try:
         text = docx2txt.process(file_path)
-        return text
+        return f"=== DOKUMEN WORD (MODE SEDERHANA) ===\n{text}" if text else "Dokumen kosong atau tidak dapat dibaca."
     except Exception as e:
         logger.error(f"Error saat mengekstrak teks dari DOCX: {e}")
         return f"Error saat membaca DOCX: {str(e)}"
@@ -470,7 +543,7 @@ async def upload_document(file: UploadFile = File(...)):
     logger.info(f"Menerima permintaan upload file: {file.filename}")
     
     try:
-        # Validasi tipe file
+        # Validasi tipe file dengan deteksi yang lebih akurat
         if not file.filename:
             logger.error("Filename is empty")
             raise HTTPException(
@@ -481,11 +554,19 @@ async def upload_document(file: UploadFile = File(...)):
         file_extension = os.path.splitext(file.filename)[1].lower()
         logger.info(f"File extension: {file_extension}")
         
-        if file_extension not in ['.pdf', '.docx']:
+        # Daftar ekstensi yang didukung dengan kemampuan baru
+        supported_extensions = ['.pdf', '.docx']
+        supported_description = {
+            '.pdf': 'PDF dengan support gambar dan metadata',
+            '.docx': 'Word Document dengan support tabel, gambar, dan formatting'
+        }
+        
+        if file_extension not in supported_extensions:
             logger.error(f"Unsupported file format: {file_extension}")
+            supported_list = ", ".join([f"{ext} ({supported_description[ext]})" for ext in supported_extensions])
             raise HTTPException(
                 status_code=400,
-                detail="Format file tidak didukung. Hanya PDF dan DOCX yang diizinkan."
+                detail=f"Format file tidak didukung. Format yang didukung: {supported_list}"
             )
         
         # Generate ID unik untuk dokumen
@@ -508,14 +589,29 @@ async def upload_document(file: UploadFile = File(...)):
                 detail=f"Gagal menyimpan file: {str(save_error)}"
             )
         
-        # Ekstrak teks dari dokumen
-        logger.info("Extracting text from document...")
+        # Ekstrak teks dari dokumen dengan metode advanced
+        logger.info("Extracting text from document with advanced method...")
         document_text = await extract_text_from_document(file_path)
         logger.info(f"Text extraction completed, length: {len(document_text)} chars")
         
+        # Analisis tambahan struktur dokumen
+        analysis_info = ""
+        try:
+            if file_extension == '.docx':
+                analysis = await analyze_docx_structure(file_path)
+                analysis_info = f"\n=== INFO DOKUMEN ===\nParagraf: {analysis.get('paragraphs', 0)}, Tabel: {analysis.get('tables', 0)}, Gambar: {analysis.get('images', 0)}, Heading: {analysis.get('headings', 0)}\n"
+            elif file_extension == '.pdf':
+                analysis = await analyze_pdf_structure(file_path)
+                analysis_info = f"\n=== INFO DOKUMEN ===\nHalaman: {analysis.get('pages', 0)}, Gambar: {analysis.get('images', 0)}, Panjang teks: {analysis.get('text_length', 0)} karakter\n"
+        except Exception as analysis_error:
+            logger.warning(f"Analysis failed but text extraction succeeded: {analysis_error}")
+        
+        # Gabungkan teks dokumen dengan info analisis
+        full_content = document_text + analysis_info
+
         response = DocumentResponse(
             document_id=document_id,
-            content=document_text,  # Return full content instead of truncated
+            content=full_content,  # Return full content with analysis
             filename=file.filename
         )
         
@@ -539,46 +635,47 @@ async def get_server_status():
         requirements_installed = True
         
         try:
-            # Cek dukungan PDF dengan PyPDF4
-            try:
-                import PyPDF4
-            except ImportError:
-                try:
-                    # Fallback ke pdfplumber jika ada
-                    import pdfplumber
-                except ImportError:
-                    try:
-                        # Fallback ke PyPDF2 jika ada
-                        import PyPDF2
-                    except ImportError:
-                        has_pdf_support = False
-                        requirements_installed = False
-            
-        except ImportError:
+            # Cek dukungan PDF
+            import PyPDF4
+            import fitz  # PyMuPDF
+        except ImportError as e:
             has_pdf_support = False
             requirements_installed = False
+            logger.warning(f"PDF support libraries missing: {e}")
             
         try:
-            # Cek dukungan DOCX dengan docx2txt
-            try:
-                import docx2txt
-            except ImportError:
-                try:
-                    import docx
-                except ImportError:
-                    has_docx_support = False
-                    requirements_installed = False
-        except ImportError:
+            # Cek dukungan DOCX
+            import docx2txt
+            from docx import Document
+        except ImportError as e:
             has_docx_support = False
             requirements_installed = False
+            logger.warning(f"DOCX support libraries missing: {e}")
             
+        # Check Ollama connection
+        ollama_status = "disconnected"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get("http://localhost:11434/api/tags")
+                if response.status_code == 200:
+                    ollama_status = "connected"
+                else:
+                    ollama_status = "error"
+        except:
+            ollama_status = "disconnected"
+        
+        # Get performance status
+        performance_status = performance_monitor.get_simple_status()
+        
         return {
             "running": True,
             "version": "1.0.0",
             "message": "Server berjalan dengan baik",
             "hasPdfSupport": has_pdf_support,
             "hasDocxSupport": has_docx_support,
-            "requirementsInstalled": requirements_installed
+            "requirementsInstalled": requirements_installed,
+            "ollama_status": ollama_status,
+            "performance": performance_status
         }
     except Exception as e:
         logger.error(f"Error saat memeriksa status server: {e}")
@@ -594,105 +691,7 @@ async def get_server_status():
             }
         )
 
-@app.post("/api/install_dependencies")
-async def install_dependencies():
-    """Endpoint untuk menginstall dependensi yang diperlukan."""
-    try:
-        # Pada kasus nyata, sebaiknya gunakan subprocess untuk menginstall dependensi
-        # Namun untuk keamanan, sebaiknya fungsi ini diimplementasikan dengan hati-hati
-        # Di contoh ini kita hanya akan mengembalikan status palsu
-        
-        return {
-            "success": True,
-            "message": "Dependensi berhasil diinstall (simulasi)"
-        }
-    except Exception as e:
-        logger.error(f"Error saat menginstall dependensi: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "message": f"Error: {str(e)}"
-            }
-        )
-
-# AI Model Management Endpoints
-
-@app.get("/api/models/available")
-async def get_available_models():
-    """Get list of available AI models from Ollama"""
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get("http://localhost:11434/api/tags")
-            if response.status_code == 200:
-                models = response.json()
-                return {
-                    "success": True,
-                    "models": models.get("models", []),
-                    "recommended": [
-                        {"name": "llama3:latest", "size": "4.7GB", "description": "Best general purpose model"},
-                        {"name": "llama3:8b", "size": "4.7GB", "description": "Balanced performance"},
-                        {"name": "mistral:latest", "size": "4.1GB", "description": "Fast and efficient"}
-                    ]
-                }
-            else:
-                return {"success": False, "error": "Failed to fetch models from Ollama"}
-    except Exception as e:
-        logger.error(f"Error fetching available models: {e}")
-        return {"success": False, "error": str(e)}
-
-@app.get("/api/models/performance")
-async def get_model_performance():
-    """Get current model performance metrics"""
-    return {
-        "current_config": {
-            "model": "llama3:8b",
-            "modes": {
-                "fast": "Quick responses, 2K context",
-                "balanced": "Balanced quality, 4K context", 
-                "quality": "Best quality, 8K context"
-            }
-        },
-        "performance_tips": [
-            "Use 'fast' mode for quick Q&A",
-            "Use 'balanced' for general chat",
-            "Use 'quality' for complex document analysis",
-            "Ensure adequate RAM (8GB+ recommended)",
-            "GPU acceleration improves speed significantly"
-        ]
-    }
-
-@app.post("/api/models/optimize")
-async def optimize_model_settings(settings: dict):
-    """Optimize model settings based on user hardware"""
-    try:
-        # This would analyze system specs and suggest optimal settings
-        ram_gb = settings.get("ram_gb", 8)
-        has_gpu = settings.get("has_gpu", False)
-        cpu_cores = settings.get("cpu_cores", 4)
-        
-        if ram_gb < 8:
-            recommendation = "fast"
-            message = "Limited RAM detected. Using fast mode for better performance."
-        elif ram_gb >= 16 and has_gpu:
-            recommendation = "quality"
-            message = "High-end system detected. Quality mode recommended."
-        else:
-            recommendation = "balanced"
-            message = "Balanced configuration for your system."
-            
-        return {
-            "success": True,
-            "recommended_mode": recommendation,
-            "message": message,
-            "optimizations": {
-                "num_thread": min(cpu_cores, 8),
-                "use_gpu": has_gpu,
-                "batch_size": 1024 if ram_gb >= 16 else 512
-            }
-        }
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+# AI Model Management - Removed unused endpoints
 
 # Document Intelligence System
 class DocumentProcessor:
@@ -831,27 +830,6 @@ Pertanyaan: {query}
 Jawaban:"""
         
         return prompt
-    
-    def _analyze_query_type(self, query: str) -> str:
-        """Analyze the type of query to tailor response"""
-        query_lower = query.lower()
-        
-        if any(word in query_lower for word in ['apa', 'apakah', 'what', 'is']):
-            return "DEFINISI/KONSEP"
-        elif any(word in query_lower for word in ['bagaimana', 'cara', 'how', 'steps']):
-            return "PROSEDUR/TUTORIAL"
-        elif any(word in query_lower for word in ['mengapa', 'kenapa', 'why', 'alasan']):
-            return "PENJELASAN/ANALISIS"
-        elif any(word in query_lower for word in ['kapan', 'when', 'waktu']):
-            return "TEMPORAL"
-        elif any(word in query_lower for word in ['dimana', 'where', 'lokasi']):
-            return "LOKASI/TEMPAT"
-        elif any(word in query_lower for word in ['berapa', 'jumlah', 'how many', 'how much']):
-            return "KUANTITATIF"
-        elif any(word in query_lower for word in ['bandingkan', 'compare', 'versus', 'vs']):
-            return "PERBANDINGAN"
-        else:
-            return "UMUM"
 
 # Initialize processors
 doc_processor = DocumentProcessor()
@@ -869,219 +847,28 @@ async def generic_exception_handler(request, exc):
         status_code=500,
         content={"detail": f"An unexpected error occurred: {str(exc)}"}
     )
-
-# Document Intelligence Endpoints
-
-@app.post("/api/document/analyze")
-async def analyze_document(document_id: str, query: str):
-    """Analyze document content for specific query"""
-    try:
-        # This would retrieve document from storage
-        # For now, return analysis capabilities
-        
-        analysis = {
-            "document_id": document_id,
-            "query": query,
-            "analysis_type": prompt_engineer._analyze_query_type(query),
-            "recommended_mode": "quality" if len(query) > 50 else "balanced",
-            "context_strategy": "chunk_based" if len(query) > 20 else "full_context"
-        }
-        
-        return analysis
-    except Exception as e:
-        logger.error(f"Error analyzing document: {e}")
-        return {"error": str(e)}
-
-@app.get("/api/intelligence/stats")
-async def get_intelligence_stats():
-    """Get current intelligence system statistics"""
-    return {
-        "document_processor": {
-            "chunk_size": doc_processor.chunk_size,
-            "overlap": doc_processor.overlap,
-            "features": ["smart_chunking", "relevance_scoring", "context_enhancement"]
-        },
-        "prompt_engineer": {
-            "query_types": ["DEFINISI/KONSEP", "PROSEDUR/TUTORIAL", "PENJELASAN/ANALISIS", 
-                          "TEMPORAL", "LOKASI/TEMPAT", "KUANTITATIF", "PERBANDINGAN", "UMUM"],
-            "modes": ["fast", "balanced", "quality"],
-            "features": ["query_analysis", "mode_adaptation", "anti_repetition"]
-        },
-        "ai_optimizer": {
-            "anti_loop_features": ["repeat_penalty", "presence_penalty", "frequency_penalty", 
-                                 "mirostat", "enhanced_stop_tokens"],
-            "sampling_improvements": ["tfs_z", "typical_p", "optimized_temperature"],
-            "performance_features": ["memory_locking", "batch_optimization", "gpu_acceleration"]
-        }
-    }
-
-# Speed Optimization Endpoints
-
-@app.post("/api/benchmark")
-async def benchmark_model():
-    """Benchmark AI model performance across different modes"""
-    benchmark_results = []
-    
-    test_queries = [
-        "Hello, how are you?",
-        "What is artificial intelligence?",
-        "Explain machine learning briefly."
-    ]
-    
-    for mode in ["fast", "balanced", "quality"]:
-        for query in test_queries:
-            start_time = time.time()
-            
-            try:
-                request = ChatRequest(
-                    message=query,
-                    response_mode=mode
-                )
-                
-                # This would call the actual chat endpoint
-                # For benchmark, we'll simulate a simplified version
-                result_time = (time.time() - start_time) * 1000
-                
-                benchmark_results.append({
-                    "mode": mode,
-                    "query": query,
-                    "time_ms": result_time,
-                    "status": "simulated"
-                })
-                
-            except Exception as e:
-                benchmark_results.append({
-                    "mode": mode,
-                    "query": query,
-                    "time_ms": -1,
-                    "error": str(e)
-                })
-    
-    return {
-        "benchmark_results": benchmark_results,
-        "recommendations": {
-            "fastest_mode": "fast",
-            "optimal_for_chat": "balanced",
-            "best_quality": "quality"
-        }
-    }
-
-@app.get("/api/performance/stats")
-async def get_performance_stats():
-    """Get current performance statistics"""
-    return {
-        "optimizations": {
-            "caching": {
-                "enabled": True,
-                "cache_size": len(response_cache.cache),
-                "max_size": response_cache.max_size,
-                "ttl_minutes": response_cache.ttl.total_seconds() / 60
-            },
-            "model_preloading": {
-                "enabled": True,
-                "model_loaded": model_preloader.model_loaded,
-                "last_activity": model_preloader.last_activity.isoformat()
-            },
-            "ai_settings": {
-                "temperature": ai_optimizer.config.temperature,
-                "max_tokens": ai_optimizer.config.num_predict,
-                "context_size": ai_optimizer.config.num_ctx,
-                "top_k": ai_optimizer.config.top_k
-            }
-        },
-        "tips": [
-            "llama3:8b model is optimized for balanced speed and quality",
-            "Cache will speed up repeated questions",
-            "Model preloading reduces first-request latency",
-            "Smaller documents and shorter questions process faster"
-        ]
-    }
-
-@app.get("/api/performance/monitor")
-async def get_performance_monitor():
-    """Get current performance monitoring data and recommendations"""
-    return performance_monitor.get_performance_status()
-
-@app.post("/api/performance/reset")
-async def reset_performance_monitor():
-    """Reset performance monitoring data"""
-    performance_monitor.response_times.clear()
-    return {"message": "Performance monitor reset successfully"}
-
-# Performance Monitor for detecting slow Ollama responses
-class PerformanceMonitor:
-    """Monitor Ollama performance and suggest optimizations"""
+# Performance stats endpoint removed - not used by frontend
+# Simplified Performance Monitoring
+class SimplePerformanceMonitor:
+    """Simple performance monitoring for basic stats"""
     
     def __init__(self):
-        self.response_times = []
-        self.slow_response_threshold = 30000  # 30 seconds
-        self.very_slow_threshold = 60000      # 1 minute
+        self.last_response_time = 0
         
     def add_response_time(self, response_time_ms: float):
         """Add a response time measurement"""
-        self.response_times.append({
-            'time': response_time_ms,
-            'timestamp': datetime.now()
-        })
-        
-        # Keep only last 10 measurements
-        if len(self.response_times) > 10:
-            self.response_times.pop(0)
+        self.last_response_time = response_time_ms
     
-    def is_performance_degraded(self) -> bool:
-        """Check if performance is consistently poor"""
-        if len(self.response_times) < 3:
-            return False
-            
-        recent_times = [r['time'] for r in self.response_times[-3:]]
-        return all(t > self.slow_response_threshold for t in recent_times)
-    
-    def get_performance_status(self) -> Dict[str, Any]:
-        """Get current performance status and recommendations"""
-        if not self.response_times:
-            return {"status": "no_data", "message": "No performance data yet"}
-        
-        latest = self.response_times[-1]
-        avg_time = sum(r['time'] for r in self.response_times) / len(self.response_times)
-        
-        if latest['time'] < 5000:  # Under 5 seconds
-            status = "excellent"
-            message = f"Great performance! Last response: {latest['time']:.0f}ms"
-            recommendations = ["Continue using current settings"]
-        elif latest['time'] < 15000:  # Under 15 seconds
-            status = "good"
-            message = f"Good performance. Last response: {latest['time']:.0f}ms"
-            recommendations = ["Performance is acceptable", "Consider fast mode for quicker responses"]
-        elif latest['time'] < 45000:  # Under 45 seconds
-            status = "slow"
-            message = f"Slow performance detected. Last response: {latest['time']:.0f}ms"
-            recommendations = [
-                "Try using fast mode",
-                "Restart Ollama service if problem persists",
-                "Check system resources (RAM/CPU)"
-            ]
-        else:  # Over 45 seconds
-            status = "very_slow"
-            message = f"Very slow performance! Last response: {latest['time']:.0f}ms"
-            recommendations = [
-                "URGENT: Restart Ollama service immediately",
-                "Check for multiple Ollama processes: tasklist | findstr ollama",
-                "Consider using a smaller model like phi3:mini",
-                "Check system RAM usage",
-                "Use shorter questions and smaller documents"
-            ]
-        
-        return {
-            "status": status,
-            "message": message,
-            "latest_time_ms": latest['time'],
-            "average_time_ms": avg_time,
-            "recommendations": recommendations,
-            "degraded": self.is_performance_degraded()
-        }
-
-# Initialize performance monitor
-performance_monitor = PerformanceMonitor()
+    def get_simple_status(self) -> str:
+        """Get simple performance status"""
+        if self.last_response_time < 5000:
+            return "excellent"
+        elif self.last_response_time < 15000:
+            return "good"
+        elif self.last_response_time < 45000:
+            return "slow"
+        else:
+            return "very_slow"
 
 # AI Response Caching System
 class ResponseCache:
@@ -1197,193 +984,21 @@ class ResponseMonitor:
         return cleaned_text if cleaned_text else "Maaf, tidak ada jawaban yang dapat saya berikan."
 
 # Model Preloading System for Speed Optimization
-class ModelPreloader:
-    """Preload and warm up AI models for faster response times"""
-    
-    def __init__(self):
-        self.model_loaded = False
-        self.last_activity = datetime.now()
-    
-    async def preload_model(self, model_name: str = "llama3:8b"):
-        """Preload the model to reduce first-request latency"""
-        try:
-            logger.info(f"Preloading model: {model_name}")
-            
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                # Send a simple prompt to load the model into memory
-                warmup_payload = {
-                    "model": model_name,
-                    "prompt": "Hello",
-                    "stream": False,
-                    "options": {
-                        "num_predict": 1,
-                        "temperature": 0.1
-                    }
-                }
-                
-                response = await client.post(
-                    "http://localhost:11434/api/generate",
-                    json=warmup_payload,
-                    timeout=60.0
-                )
-                
-                if response.status_code == 200:
-                    self.model_loaded = True
-                    self.last_activity = datetime.now()
-                    logger.info(f"Model {model_name} preloaded successfully")
-                    return True
-                else:
-                    logger.error(f"Failed to preload model: {response.status_code}")
-                    return False
-                    
-        except Exception as e:
-            logger.error(f"Error preloading model: {e}")
-            return False
-    
-    def update_activity(self):
-        """Update last activity timestamp"""
-        self.last_activity = datetime.now()
-    
-    def should_reload(self, minutes_threshold: int = 30) -> bool:
-        """Check if model should be reloaded due to inactivity"""
-        return (datetime.now() - self.last_activity).total_seconds() > (minutes_threshold * 60)
-
-# Ollama Connection Optimization
-class OllamaOptimizer:
-    """Optimize Ollama connections for speed"""
-    
-    def __init__(self):
-        self.keep_alive_duration = "5m"  # Keep model loaded for 5 minutes
-        self.last_used = {}
-    
-    async def warm_up_model(self, model_name: str = "llama3:8b"):
-        """Warm up model with keep-alive"""
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                # Send keep-alive request
-                payload = {
-                    "model": model_name,
-                    "prompt": "",
-                    "keep_alive": self.keep_alive_duration,
-                    "options": {
-                        "num_predict": 0
-                    }
-                }
-                
-                response = await client.post(
-                    "http://localhost:11434/api/generate",
-                    json=payload,
-                    timeout=30.0
-                )
-                
-                if response.status_code == 200:
-                    self.last_used[model_name] = datetime.now()
-                    logger.info(f"🔥 Model {model_name} warmed up with keep-alive")
-                    return True
-                    
-        except Exception as e:
-            logger.error(f"Failed to warm up model: {e}")
-            return False
-    
-    def get_optimized_payload(self, base_payload: dict) -> dict:
-        """Add keep-alive and other optimizations to payload"""
-        optimized = base_payload.copy()
-        
-        # Add keep-alive to prevent model unloading
-        optimized["keep_alive"] = self.keep_alive_duration
-        
-        # Simple optimization - balanced stop tokens
-        optimized["options"].update({
-            "stop": ["\n\n\n", "Human:", "User:", "Assistant:", "PERTANYAAN:", "JAWABAN:"],
-        })
-        
-        return optimized
+# Remove the entire ModelPreloader and OllamaOptimizer classes
 
 # Initialize all components
 ai_optimizer = AIModelOptimizer()
 response_cache = ResponseCache(max_size=200, ttl_minutes=60)  # 1 hour TTL
 response_monitor = ResponseMonitor()
-model_preloader = ModelPreloader()
-ollama_optimizer = OllamaOptimizer()
-performance_monitor = PerformanceMonitor()
-
-# Emergency Ollama Management
-class OllamaEmergencyManager:
-    """Emergency management for stuck Ollama processes"""
-    
-    def __init__(self):
-        self.last_restart = datetime.now() - timedelta(minutes=10)  # Allow immediate restart
-        self.restart_cooldown = timedelta(minutes=2)  # 2 minute cooldown between restarts
-    
-    async def emergency_restart_ollama(self) -> bool:
-        """Emergency restart of Ollama service when it's stuck"""
-        try:
-            # Check cooldown
-            if datetime.now() - self.last_restart < self.restart_cooldown:
-                logger.warning("Ollama restart on cooldown, skipping")
-                return False
-            
-            logger.warning("🚨 EMERGENCY: Attempting to restart Ollama service...")
-            
-            # Kill existing Ollama processes
-            import subprocess
-            try:
-                subprocess.run(['taskkill', '/f', '/im', 'ollama.exe'], 
-                             capture_output=True, check=False)
-                logger.info("Killed existing Ollama processes")
-            except Exception as e:
-                logger.warning(f"Failed to kill Ollama processes: {e}")
-            
-            # Wait a moment
-            await asyncio.sleep(2)
-            
-            # Start Ollama service (assuming it's in PATH)
-            try:
-                subprocess.Popen(['ollama', 'serve'], 
-                               creationflags=subprocess.CREATE_NEW_CONSOLE)
-                logger.info("Started new Ollama service")
-                
-                # Wait for service to start
-                await asyncio.sleep(5)
-                
-                # Test if it's responding
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    response = await client.get("http://localhost:11434/api/tags")
-                    if response.status_code == 200:
-                        logger.info("✅ Ollama restart successful!")
-                        self.last_restart = datetime.now()
-                        return True
-                    else:
-                        logger.error("Ollama not responding after restart")
-                        return False
-                        
-            except Exception as e:
-                logger.error(f"Failed to start Ollama service: {e}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Emergency restart failed: {e}")
-            return False
-    
-    def can_restart(self) -> bool:
-        """Check if we can restart Ollama (not on cooldown)"""
-        return datetime.now() - self.last_restart >= self.restart_cooldown
-
-# Initialize emergency manager
-ollama_emergency = OllamaEmergencyManager()
+# Initialize simple performance monitor
+performance_monitor = SimplePerformanceMonitor()
 
 # Startup and Shutdown Events
 @app.on_event("startup")
 async def startup_event():
-    """Initialize and preload models on startup"""
-    logger.info("🚀 Starting FastAPI application with ultra-speed optimizations...")
-    
-    # Preload model for faster responses
-    await model_preloader.preload_model("llama3:8b")
-    
-    # Warm up Ollama with keep-alive
-    await ollama_optimizer.warm_up_model("llama3:8b")
-    
+    """Initialize application on startup"""
+    logger.info("🚀 Starting FastAPI application...")
+    logger.info("✅ Document processing system ready")
     logger.info("⚡ Application startup complete with speed optimizations")
 
 @app.on_event("shutdown")
@@ -1420,78 +1035,158 @@ if __name__ == "__main__":
         print("💡 Pastikan port 8000 tidak digunakan aplikasi lain")
         print("💡 Coba jalankan: netstat -ano | findstr :8000")
 
-# Ollama Health Check and Mode Recommendation
-@app.get("/api/ollama/health")
-async def check_ollama_health():
-    """Check Ollama connectivity and suggest optimal mode based on response time"""
+# Endpoint untuk analisis detail dokumen
+@app.post("/api/analyze_document")
+async def analyze_document_details(file: UploadFile = File(...)):
+    """Analisis detail dokumen tanpa menyimpan file."""
+    logger.info(f"Analyzing document: {file.filename}")
+    
     try:
-        start_time = time.time()
+        # Validasi tipe file
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="Filename tidak boleh kosong")
+            
+        file_extension = os.path.splitext(file.filename)[1].lower()
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            # Test with a simple request
-            test_payload = {
-                "model": "llama3:8b",
-                "prompt": "Hi",
-                "stream": False,
-                "options": {
-                    "num_predict": 5,
-                    "temperature": 0.1
-                }
-            }
-            
-            response = await client.post(
-                "http://localhost:11434/api/generate",
-                json=test_payload,
-                timeout=30.0
+        if file_extension not in ['.pdf', '.docx']:
+            raise HTTPException(
+                status_code=400,
+                detail="Format file tidak didukung. Hanya PDF dan DOCX yang diizinkan."
             )
+        
+        # Buat file temporary untuk analisis
+        temp_id = str(uuid.uuid4())
+        temp_path = os.path.join(UPLOAD_FOLDER, f"temp_{temp_id}{file_extension}")
+        
+        try:
+            # Simpan temporary
+            with open(temp_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
             
-            response_time = (time.time() - start_time) * 1000
+            # Analisis dengan fungsi advanced
+            analysis_result = {}
             
-            if response.status_code == 200:
-                # Suggest mode based on response time
-                if response_time < 2000:  # Under 2 seconds
-                    suggested_mode = "quality"
-                    message = f"Excellent performance ({response_time:.0f}ms)! All modes available."
-                elif response_time < 5000:  # Under 5 seconds
-                    suggested_mode = "balanced"
-                    message = f"Good performance ({response_time:.0f}ms). Balanced or Fast mode recommended."
-                else:  # Over 5 seconds
-                    suggested_mode = "fast"
-                    message = f"Slower performance ({response_time:.0f}ms). Fast mode recommended for better experience."
+            if file_extension == '.docx':
+                analysis_result = await analyze_docx_structure(temp_path)
+            elif file_extension == '.pdf':
+                analysis_result = await analyze_pdf_structure(temp_path)
+            
+            analysis_result.update({
+                "filename": file.filename,
+                "file_type": file_extension,
+                "file_size": os.path.getsize(temp_path)
+            })
+            
+            return analysis_result
+            
+        finally:
+            # Hapus file temporary
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
                 
-                return {
-                    "status": "healthy",
-                    "response_time_ms": response_time,
-                    "suggested_mode": suggested_mode,
-                    "message": message,
-                    "recommendations": {
-                        "fast": "Use for quick Q&A (3+ min timeout)",
-                        "balanced": "Use for normal chat (5+ min timeout)",
-                        "quality": "Use for detailed analysis (10+ min timeout)"
-                    }
-                }
-            else:
-                return {
-                    "status": "error",
-                    "error": f"Ollama returned status {response.status_code}",
-                    "suggestion": "Check if Ollama is properly running with llama3:8b model"
-                }
-                
-    except httpx.ConnectError:
-        return {
-            "status": "disconnected",
-            "error": "Cannot connect to Ollama",
-            "suggestion": "Start Ollama service: 'ollama serve' then 'ollama pull llama3:8b'"
-        }
-    except httpx.TimeoutException:
-        return {
-            "status": "timeout",
-            "error": "Ollama health check timed out",
-            "suggestion": "Ollama is running but very slow. Try restarting Ollama service."
-        }
+    except HTTPException:
+        raise
     except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "suggestion": "Check Ollama installation and model availability"
+        logger.error(f"Error analyzing document: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error analyzing document: {str(e)}")
+
+async def analyze_docx_structure(file_path: str) -> dict:
+    """Analisis struktur detail dokumen DOCX."""
+    try:
+        doc = Document(file_path)
+        
+        analysis = {
+            "document_type": "DOCX",
+            "paragraphs": len([p for p in doc.paragraphs if p.text.strip()]),
+            "tables": len(doc.tables),
+            "images": 0,
+            "headings": 0,
+            "text_length": 0,
+            "styles_used": set(),
+            "has_header_footer": False
         }
+        
+        # Analisis paragraf dan style
+        for paragraph in doc.paragraphs:
+            if paragraph.text.strip():
+                analysis["text_length"] += len(paragraph.text)
+                analysis["styles_used"].add(paragraph.style.name)
+                
+                if paragraph.style.name.startswith('Heading'):
+                    analysis["headings"] += 1
+        
+        # Hitung gambar
+        for rel in doc.part.rels.values():
+            if "image" in rel.target_ref:
+                analysis["images"] += 1
+        
+        # Konversi set ke list untuk JSON serialization
+        analysis["styles_used"] = list(analysis["styles_used"])
+        
+        # Deteksi header/footer
+        try:
+            for section in doc.sections:
+                if section.header.paragraphs or section.footer.paragraphs:
+                    analysis["has_header_footer"] = True
+                    break
+        except:
+            pass
+        
+        return analysis
+        
+    except Exception as e:
+        logger.error(f"Error analyzing DOCX structure: {e}")
+        return {"error": str(e)}
+
+async def analyze_pdf_structure(file_path: str) -> dict:
+    """Analisis struktur detail dokumen PDF."""
+    try:
+        pdf_document = fitz.open(file_path)
+        
+        analysis = {
+            "document_type": "PDF",
+            "pages": len(pdf_document),
+            "images": 0,
+            "text_length": 0,
+            "has_bookmarks": False,
+            "has_forms": False,
+            "metadata": {}
+        }
+        
+        # Ekstrak metadata
+        metadata = pdf_document.metadata
+        analysis["metadata"] = {
+            "title": metadata.get('title', ''),
+            "author": metadata.get('author', ''),
+            "subject": metadata.get('subject', ''),
+            "creator": metadata.get('creator', ''),
+            "producer": metadata.get('producer', ''),
+            "creation_date": metadata.get('creationDate', ''),
+            "modification_date": metadata.get('modDate', '')
+        }
+        
+        # Analisis per halaman
+        for page_num in range(len(pdf_document)):
+            page = pdf_document[page_num]
+            
+            # Hitung teks
+            text = page.get_text()
+            analysis["text_length"] += len(text)
+            
+            # Hitung gambar
+            image_list = page.get_images()
+            analysis["images"] += len(image_list)
+        
+        # Cek bookmark
+        try:
+            toc = pdf_document.get_toc()
+            analysis["has_bookmarks"] = len(toc) > 0
+        except:
+            pass
+        
+        pdf_document.close()
+        return analysis
+        
+    except Exception as e:
+        logger.error(f"Error analyzing PDF structure: {e}")
+        return {"error": str(e)}
