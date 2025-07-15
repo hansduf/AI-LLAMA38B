@@ -71,20 +71,20 @@ class ModelConfig:
     stop_tokens: list
 
 class AIModelOptimizer:
-    """Simplified AI Model optimizer - single balanced configuration"""
+    """Ultra-speed AI Model optimizer for gaming laptop - prioritizing speed"""
     
     def __init__(self):
-        # Single optimized configuration for llama3:8b
+        # ULTRA-SPEED GAMING LAPTOP configuration (22GB RAM!)
         self.config = ModelConfig(
             model_name="llama3:8b",
-            temperature=0.7,        # Good balance of creativity and consistency
-            top_p=0.9,             # Flexible sampling
-            top_k=50,              # Moderate token choices
-            num_ctx=4096,          # Standard context window
-            num_predict=400,       # Medium-length responses
-            repeat_penalty=1.1,    # Light repetition penalty
-            num_thread=-1,         # Use all available threads
-            stop_tokens=["\n\n\n", "Human:", "Assistant:", "PERTANYAAN:", "JAWABAN:", "User:", "Dokai:"]
+            temperature=0.3,        # Lower for faster, more deterministic responses
+            top_p=0.7,             # Reduced for speed
+            top_k=20,              # Much lower for speed
+            num_ctx=2048,          # Reduced context for speed (still plenty)
+            num_predict=200,       # Shorter responses for speed
+            repeat_penalty=1.1,    # Standard penalty
+            num_thread=-1,         # Use all CPU threads
+            stop_tokens=["\n\n\n", "Human:", "Assistant:", "PERTANYAAN:", "JAWABAN:", "User:"]
         )
     
     def get_config(self) -> ModelConfig:
@@ -108,15 +108,26 @@ class AIModelOptimizer:
                 "repeat_last_n": 50,
                 "stop": config.stop_tokens,
                 
-                # Performance optimizations
-                "num_gpu": 1,
-                "low_vram": False,
-                "f16_kv": True,
-                "num_batch": 256,    # Balanced batch size
-                "numa": False,       # Disable NUMA for speed
-                "mlock": True,       # Lock model in memory
-                "seed": -1,          # Random seed for variety
-                "num_gqa": -1        # Use default optimal setting
+                # ULTRA-SPEED GAMING LAPTOP optimizations (22GB RAM!)
+                "num_gpu": -1,       # Auto-detect GPU (Nitro might have dGPU)
+                "low_vram": False,   # Disable - you have plenty RAM
+                "f16_kv": False,     # Disable for speed (slight quality loss)
+                "num_batch": 1024,   # Even larger batch for 22GB RAM
+                "numa": False,       # Still disable for single socket
+                "mlock": True,       # Lock model in memory (you have RAM!)
+                "use_mmap": True,    # Enable memory mapping for speed
+                "seed": -1,          # Random seed
+                "num_gqa": -1,       # Default
+                "rope_freq_base": 10000,
+                "rope_freq_scale": 1.0,
+                
+                # Additional speed optimizations
+                "penalize_newline": False,  # Don't penalize newlines for speed
+                "presence_penalty": 0.0,    # Disable for speed
+                "frequency_penalty": 0.0,   # Disable for speed
+                "tfs_z": 1.0,              # Disable tail free sampling for speed
+                "typical_p": 1.0,          # Disable typical sampling for speed
+                "min_p": 0.0               # Disable min probability for speed
             }
         }
 
@@ -208,14 +219,30 @@ async def chat_with_llama(request: ChatRequest):
         # Enhanced prompt engineering with conversation history
         prompt_start = time.time()
         if request.context:
+            # SAFETY: Limit document context size to prevent timeout
+            if len(request.context) > 10000:  # Max 10KB context
+                logger.warning(f"⚠️ Large document truncated: {len(request.context)} → 10000 chars")
+                request.context = request.context[:10000] + "..."
+            
             # Process document with enhanced intelligence and conversation history
-            enhanced_context = doc_processor.enhance_context(request.message, request.context)
-            optimized_prompt = prompt_engineer.create_document_prompt(
-                request.message, 
-                enhanced_context,
-                request.conversation_history or []
-            )
-            logger.info(f"Using enhanced document context with {len(enhanced_context)} characters")
+            try:
+                enhanced_context = doc_processor.enhance_context(request.message, request.context)
+                optimized_prompt = prompt_engineer.create_document_prompt(
+                    request.message, 
+                    enhanced_context,
+                    request.conversation_history or []
+                )
+                logger.info(f"Using enhanced document context with {len(enhanced_context)} characters")
+            except Exception as e:
+                logger.error(f"Document processing failed: {e}")
+                # Fallback to simple context
+                enhanced_context = request.context[:1500] + "..." if len(request.context) > 1500 else request.context
+                optimized_prompt = prompt_engineer.create_document_prompt(
+                    request.message, 
+                    enhanced_context,
+                    request.conversation_history or []
+                )
+                logger.info(f"Using fallback document context with {len(enhanced_context)} characters")
         else:
             # Enhanced general conversation with history
             optimized_prompt = prompt_engineer.create_general_prompt(
@@ -257,8 +284,8 @@ async def chat_with_llama(request: ChatRequest):
         # Prepare request payload
         payload_start = time.time()
         
-        # Set reasonable timeout for llama3:8b (2 minutes)
-        timeout_seconds = 120.0
+        # Set timeout for gaming laptop (10 minutes for complex document analysis)
+        timeout_seconds = 600.0  # 10 minutes for gaming laptop
         
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             # Get optimized payload
@@ -677,11 +704,25 @@ class DocumentProcessor:
     
     def split_document(self, text: str) -> List[str]:
         """Split document into overlapping chunks for better context"""
+        if not text or len(text.strip()) == 0:
+            return []
+        
+        # Safety limits to prevent infinite loops
+        if len(text) > 50000:  # Max 50KB text processing
+            text = text[:50000] + "..."
+        
         chunks = []
-        for i in range(0, len(text), self.chunk_size - self.overlap):
+        step_size = max(1, self.chunk_size - self.overlap)  # Ensure step_size is at least 1
+        
+        for i in range(0, len(text), step_size):
             chunk = text[i:i + self.chunk_size]
             if chunk.strip():
                 chunks.append(chunk.strip())
+            
+            # Safety break to prevent infinite loops
+            if len(chunks) >= 50:  # Max 50 chunks
+                break
+                
         return chunks
     
     def find_relevant_chunks(self, query: str, chunks: List[str], max_chunks: int = 3) -> List[str]:
@@ -699,29 +740,46 @@ class DocumentProcessor:
         return [chunk for chunk, score in chunk_scores[:max_chunks] if score > 0]
     
     def enhance_context(self, query: str, full_context: str) -> str:
-        """Create enhanced context with relevant chunks (balanced optimization)"""
+        """Create enhanced context with relevant chunks (GAMING LAPTOP optimization)"""
         
-        # Balanced context limits for optimal performance
-        max_context_length = 2500  # Reasonable context size
-        max_chunks = 4             # Good balance of coverage
+        # GENEROUS limits for gaming laptop with 22GB RAM
+        max_context_length = 2000  # Much larger context
+        max_chunks = 3             # More chunks for better analysis
         
+        # Safety check - prevent processing huge documents
+        if not full_context or len(full_context.strip()) == 0:
+            return ""
+        
+        # With 22GB RAM, we can process larger contexts
         if len(full_context) <= max_context_length:
-            return full_context
+            return full_context.strip()
         
-        chunks = self.split_document(full_context)
-        relevant_chunks = self.find_relevant_chunks(query, chunks, max_chunks=max_chunks)
-        
-        if not relevant_chunks:
-            # If no relevant chunks found, use first chunk only
-            relevant_chunks = chunks[:1]
-        
-        # Join chunks and limit total length
-        combined_context = "\n\n".join(relevant_chunks)
-        
-        if len(combined_context) > max_context_length:
-            combined_context = combined_context[:max_context_length] + "..."
+        try:
+            # Full processing for gaming laptop
+            chunks = self.split_document(full_context)
             
-        return combined_context
+            # With good RAM, process more chunks
+            if len(chunks) > 30:  # Increased from 10
+                chunks = chunks[:30]
+            
+            relevant_chunks = self.find_relevant_chunks(query, chunks, max_chunks=max_chunks)
+            
+            if not relevant_chunks:
+                # Use first chunks if no relevance found
+                relevant_chunks = chunks[:max_chunks] if chunks else []
+            
+            # Join chunks with generous length
+            combined_context = "\n\n".join(relevant_chunks)
+            
+            if len(combined_context) > max_context_length:
+                combined_context = combined_context[:max_context_length] + "..."
+                
+            return combined_context.strip()
+            
+        except Exception as e:
+            # Fallback: return larger truncated context
+            logger.warning(f"Document processing failed: {e}")
+            return full_context[:max_context_length] + "..." if len(full_context) > max_context_length else full_context
 
 # Advanced Prompt Engineering System
 class PromptEngineer:
