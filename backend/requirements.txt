@@ -1,0 +1,10 @@
+fastapi>=0.68.0
+uvicorn>=0.15.0
+httpx>=0.23.0
+python-multipart>=0.0.5
+# Alternatif untuk python-docx
+docx2txt>=0.8
+# Alternatif untuk PyPDF2 yang pure Python (tidak perlu kompilasi)
+PyPDF4>=1.27.0
+# Atau bisa menggunakan ini juga untuk alternatif lain
+# pdfplumber>=0.10.0
