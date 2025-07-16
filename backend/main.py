@@ -14,7 +14,6 @@ import time
 import hashlib
 import docx2txt  # For basic DOCX processing
 import PyPDF4   # For PDF processing
-import time
 import base64
 import io
 from docx import Document  # For advanced DOCX processing
@@ -541,7 +540,7 @@ async def chat_with_llama(request: ChatRequest):
             total_time = (time.time() - start_time) * 1000
             logger.info(f"🎯 [TIMING] CACHE HIT! Total response time: {total_time:.2f}ms")
             
-            # Add active document info to cached response if available
+            # Add enhanced document info to cached response if available
             response_data = {
                 "response": cached_response,
                 "status": "complete",
@@ -549,11 +548,24 @@ async def chat_with_llama(request: ChatRequest):
                 "timing": {
                     "total_ms": total_time,
                     "source": "cache"
+                },
+                "chat_context": {
+                    "has_document_context": bool(final_context),
+                    "is_document_chat": bool(final_context),
+                    "document_source": "active_document" if not request.context else "uploaded_document"
                 }
             }
             
-            if active_doc_info:
-                response_data["document_info"] = active_doc_info
+            # Add enhanced document context for cached responses
+            if active_doc_info or final_context:
+                active_doc = document_library.get_active_document()
+                response_data["document_context"] = {
+                    "display_name": active_doc.original_filename if active_doc else "Uploaded Document",
+                    "file_type": active_doc.file_type if active_doc else "unknown",
+                    "document_id": active_doc.document_id if active_doc else None,
+                    "content_length": len(final_context) if final_context else 0,
+                    "context_info": active_doc_info if active_doc_info else "📄 Analyzing uploaded document"
+                }
             
             return JSONResponse(response_data)
         
@@ -641,7 +653,7 @@ async def chat_with_llama(request: ChatRequest):
                 
                 logger.info(f"Final cleaned response length: {len(cleaned_response)} characters")
                 
-                # Prepare response data
+                # Prepare response data with enhanced document context
                 response_data = {
                     "response": cleaned_response,
                     "status": "complete",
@@ -658,12 +670,24 @@ async def chat_with_llama(request: ChatRequest):
                             "ollama_request": ollama_time,
                             "response_processing": processing_time
                         }
+                    },
+                    "chat_context": {
+                        "has_document_context": bool(final_context),
+                        "is_document_chat": bool(final_context),
+                        "document_source": "active_document" if not request.context else "uploaded_document"
                     }
                 }
                 
-                # Add document info if active document was used
-                if active_doc_info:
-                    response_data["document_info"] = active_doc_info
+                # Add enhanced document info for chat display
+                if active_doc_info or final_context:
+                    active_doc = document_library.get_active_document()
+                    response_data["document_context"] = {
+                        "display_name": active_doc.original_filename if active_doc else "Uploaded Document",
+                        "file_type": active_doc.file_type if active_doc else "unknown",
+                        "document_id": active_doc.document_id if active_doc else None,
+                        "content_length": len(final_context) if final_context else 0,
+                        "context_info": active_doc_info if active_doc_info else "📄 Analyzing uploaded document"
+                    }
                 
                 return JSONResponse(response_data)
             else:
@@ -990,7 +1014,25 @@ async def upload_document(file: UploadFile = File(...)):
         
         document_library.add_document(document_metadata)
         
-        return response
+        # Enhanced response with chat context info
+        return {
+            "document_id": document_id,
+            "content": full_content,
+            "filename": file.filename,
+            "chat_notification": {
+                "type": "document_upload",
+                "message": f"📄 **Document uploaded:** {file.filename}",
+                "document_info": {
+                    "document_id": document_id,
+                    "filename": file.filename,
+                    "file_type": file_extension,
+                    "file_size": os.path.getsize(file_path),
+                    "upload_date": datetime.now().isoformat()
+                },
+                "analysis_summary": analysis_info,
+                "timestamp": datetime.now().isoformat()
+            }
+        }
         
     except HTTPException:
         raise
@@ -1182,63 +1224,63 @@ async def get_active_document():
         logger.error(f"Error getting active document: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting active document: {str(e)}")
 
-# Simplified Response Processing Classes
-class ResponseCache:
-    """Simple in-memory cache for responses"""
-    
-    def __init__(self, max_size: int = 100, ttl_minutes: int = 30):
-        self.cache: Dict[str, Dict] = {}
-        self.max_size = max_size
-        self.ttl = timedelta(minutes=ttl_minutes)
-    
-    def _generate_key(self, prompt: str, context: str = None) -> str:
-        """Generate cache key"""
-        content = f"{prompt}:{context or ''}"
-        return hashlib.md5(content.encode()).hexdigest()
-    
-    def get(self, prompt: str, context: str = None) -> Optional[str]:
-        """Get cached response"""
-        key = self._generate_key(prompt, context)
+# Document Context Change API
+@app.post("/api/documents/{document_id}/context-switch")
+async def document_context_switch(document_id: str):
+    """Handle document context switch for chat notifications"""
+    try:
+        # Get document info
+        doc = document_library.get_document(document_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
         
-        if key in self.cache:
-            entry = self.cache[key]
-            if datetime.now() - entry['timestamp'] < self.ttl:
-                return entry['response']
-            else:
-                del self.cache[key]
+        # Set as active document
+        success = document_library.set_active_document(document_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to set active document")
         
-        return None
-    
-    def set(self, prompt: str, response: str, context: str = None):
-        """Cache a response"""
-        key = self._generate_key(prompt, context)
-        
-        if len(self.cache) >= self.max_size:
-            oldest_key = min(self.cache.keys(), 
-                           key=lambda k: self.cache[k]['timestamp'])
-            del self.cache[oldest_key]
-        
-        self.cache[key] = {
-            'response': response,
-            'timestamp': datetime.now()
+        return {
+            "success": True,
+            "message": f"Context switched to: {doc.original_filename}",
+            "chat_message": {
+                "type": "system",
+                "content": f"🔄 **Document context switched to:** {doc.original_filename}",
+                "document_info": {
+                    "document_id": doc.document_id,
+                    "filename": doc.original_filename,
+                    "file_type": doc.file_type,
+                    "upload_date": doc.upload_date
+                },
+                "timestamp": datetime.now().isoformat()
+            }
         }
-    
-    def clear(self):
-        """Clear cache"""
-        self.cache.clear()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error switching document context: {e}")
+        raise HTTPException(status_code=500, detail=f"Error switching context: {str(e)}")
 
-class ResponseMonitor:
-    """Simple response quality monitor"""
+# Run server directly if this file is executed
+if __name__ == "__main__":
+    import uvicorn
     
-    def clean_response(self, text: str) -> str:
-        """Basic response cleaning"""
-        if not text or text.strip() == "":
-            return "Maaf, tidak ada jawaban yang dapat saya berikan."
-        
-        cleaned_text = text.strip()
-        
-        # Limit length if extremely long
-        if len(cleaned_text) > 2000:
-            cleaned_text = cleaned_text[:2000] + "..."
-        
-        return cleaned_text
+    print("🚀 Starting Dokai Chat Backend Server...")
+    print("📡 Server will be available at: http://localhost:8000")
+    print("📚 API Documentation: http://localhost:8000/docs")
+    print("🔄 Auto-reload enabled for development")
+    
+    try:
+        uvicorn.run(
+            "main:app",
+            host="0.0.0.0",
+            port=8000,
+            reload=True,
+            log_level="info"
+        )
+    except KeyboardInterrupt:
+        print("\n🛑 Server stopped by user")
+    except Exception as e:
+        print(f"❌ Error starting server: {e}")
+        import traceback
+        traceback.print_exc()
