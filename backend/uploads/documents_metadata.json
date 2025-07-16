@@ -11,17 +11,6 @@
     "is_active": false
   },
   {
-    "document_id": "d0a7292b-f576-489b-8586-f311bf742680",
-    "filename": "d0a7292b-f576-489b-8586-f311bf742680.docx",
-    "original_filename": "Surat Pengantar Magang Farhan.docx",
-    "upload_date": "2025-07-16T07:44:15.379750",
-    "file_size": 128936,
-    "file_type": ".docx",
-    "content_preview": "=== DOKUMEN WORD ===\n\nKEMENTERIAN PENDIDIKAN TINGGI, SAINS, DAN TEKNOLOGI UNIVERSITAS BRAWIJAYA\nPenulis: Akademik Vokasiub\n\n## Fakultas Vokasi\nJalan Veteran No. 12 – 16,\nMalang 65145, Indonesia\nTelp. ",
-    "analysis_summary": {},
-    "is_active": true
-  },
-  {
     "document_id": "4f638b57-6cf1-40b8-9cbb-a621c820deab",
     "filename": "4f638b57-6cf1-40b8-9cbb-a621c820deab.docx",
     "original_filename": "LAPORAN.docx",
@@ -31,5 +20,16 @@
     "content_preview": "=== DOKUMEN WORD ===\n\nLAPORAN\nPenulis: Rifqi Athallah\nLaporan Pengaduan Masyarakat dan Layanan Pemerintahan untuk Transparansi Perbaikan Infrastruktur Jalan Berbasis Teknologi Blockchain\nOLIVIA X 2025",
     "analysis_summary": {},
     "is_active": false
+  },
+  {
+    "document_id": "b3d9b2f9-fa20-47f9-b7fe-570a29d1944f",
+    "filename": "b3d9b2f9-fa20-47f9-b7fe-570a29d1944f.docx",
+    "original_filename": "Praktikum API (2).docx",
+    "upload_date": "2025-07-16T09:56:28.460223",
+    "file_size": 1475470,
+    "file_type": ".docx",
+    "content_preview": "=== DOKUMEN WORD ===\n\nModul Praktikum\nPenulis: WINDOWS\nAPI\nDirancang Oleh :\nJendra Sesoca S.T, M.T\nJURUSAN TEKNOLOGI INFORMASI\nFAKULTAS VOKASI\nUNIVERSITAS BRAWIJAYA\n2025\nPraktikum API\nPengantar\nPada p",
+    "analysis_summary": {},
+    "is_active": true
   }
 ]

@@ -480,6 +480,13 @@ async def chat_with_llama(request: ChatRequest):
         final_context = request.context
         active_doc_info = ""
         
+        # CRITICAL DEBUG: Log current active document
+        current_active = document_library.get_active_document()
+        if current_active:
+            logger.info(f"🔍 [DEBUG] Current active document: {current_active.original_filename} (ID: {current_active.document_id})")
+        else:
+            logger.info("🔍 [DEBUG] No active document currently set")
+        
         if not final_context:
             # Check for active document in library
             active_doc = document_library.get_active_document()
@@ -535,6 +542,14 @@ async def chat_with_llama(request: ChatRequest):
         cached_response = response_cache.get(request.message, context=final_context)
         cache_time = (time.time() - cache_start) * 1000
         logger.info(f"⚡ [TIMING] Cache check: {cache_time:.2f}ms")
+        
+        # CRITICAL DEBUG: Log cache hit/miss with context info
+        if cached_response:
+            logger.info(f"🎯 [CACHE] HIT - Using cached response for message: {request.message[:50]}...")
+            if final_context:
+                logger.info(f"🎯 [CACHE] Context length: {len(final_context)} chars")
+        else:
+            logger.info(f"❌ [CACHE] MISS - Will query Ollama for message: {request.message[:50]}...")
         
         if cached_response:
             total_time = (time.time() - start_time) * 1000
@@ -1014,6 +1029,10 @@ async def upload_document(file: UploadFile = File(...)):
         
         document_library.add_document(document_metadata)
         
+        # CRITICAL: Clear cache when uploading new document to prevent old context
+        response_cache.clear()
+        logger.info(f"🧹 Cache cleared after uploading new document: {file.filename}")
+        
         # Enhanced response with chat context info
         return {
             "document_id": document_id,
@@ -1118,6 +1137,10 @@ async def select_document(document_id: str):
         if not success:
             raise HTTPException(status_code=404, detail="Document not found")
         
+        # CRITICAL: Clear cache when switching documents to prevent old context
+        response_cache.clear()
+        logger.info("🧹 Cache cleared after document switch")
+        
         # Get the newly active document
         active_doc = document_library.get_active_document()
         
@@ -1176,6 +1199,10 @@ async def clear_document_selection():
             doc.is_active = False
         
         document_library.save_metadata(documents)
+        
+        # CRITICAL: Clear cache when clearing document selection
+        response_cache.clear()
+        logger.info("🧹 Cache cleared after clearing document selection")
         
         return {
             "success": True,
