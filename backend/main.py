@@ -21,6 +21,8 @@ from docx import Document  # For advanced DOCX processing
 from PIL import Image
 import fitz  # PyMuPDF for better PDF processing
 import magic  # For file type detection
+import json
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -51,6 +53,317 @@ class DocumentResponse(BaseModel):
     document_id: str
     content: str
     filename: str
+
+# Document Library System
+import json
+from pathlib import Path
+
+# Document Metadata Storage
+METADATA_FILE = os.path.join(UPLOAD_FOLDER, "documents_metadata.json")
+
+class DocumentMetadata(BaseModel):
+    document_id: str
+    filename: str
+    original_filename: str
+    upload_date: str
+    file_size: int
+    file_type: str  # .pdf or .docx
+    content_preview: str  # First 200 chars
+    analysis_summary: Dict[str, Any]
+    is_active: bool = False
+
+class DocumentLibrary:
+    """Manage document library with persistent storage"""
+    
+    def __init__(self):
+        self.metadata_file = METADATA_FILE
+        self.ensure_metadata_file()
+    
+    def ensure_metadata_file(self):
+        """Ensure metadata file exists"""
+        if not os.path.exists(self.metadata_file):
+            self.save_metadata([])
+    
+    def load_metadata(self) -> List[DocumentMetadata]:
+        """Load all document metadata"""
+        try:
+            with open(self.metadata_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return [DocumentMetadata(**item) for item in data]
+        except Exception as e:
+            logger.error(f"Error loading metadata: {e}")
+            return []
+    
+    def save_metadata(self, documents: List[DocumentMetadata]):
+        """Save document metadata"""
+        try:
+            data = [doc.dict() for doc in documents]
+            with open(self.metadata_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving metadata: {e}")
+    
+    def add_document(self, metadata: DocumentMetadata):
+        """Add new document to library"""
+        documents = self.load_metadata()
+        
+        # Set all other documents as inactive
+        for doc in documents:
+            doc.is_active = False
+        
+        # Add new document as active
+        metadata.is_active = True
+        documents.append(metadata)
+        
+        self.save_metadata(documents)
+        logger.info(f"Added document to library: {metadata.filename}")
+    
+    def get_all_documents(self) -> List[DocumentMetadata]:
+        """Get all documents in library"""
+        return self.load_metadata()
+    
+    def get_document(self, document_id: str) -> Optional[DocumentMetadata]:
+        """Get specific document by ID"""
+        documents = self.load_metadata()
+        for doc in documents:
+            if doc.document_id == document_id:
+                return doc
+        return None
+    
+    def set_active_document(self, document_id: str) -> bool:
+        """Set document as active"""
+        documents = self.load_metadata()
+        found = False
+        
+        for doc in documents:
+            if doc.document_id == document_id:
+                doc.is_active = True
+                found = True
+            else:
+                doc.is_active = False
+        
+        if found:
+            self.save_metadata(documents)
+            logger.info(f"Set active document: {document_id}")
+        
+        return found
+    
+    def get_active_document(self) -> Optional[DocumentMetadata]:
+        """Get currently active document"""
+        documents = self.load_metadata()
+        for doc in documents:
+            if doc.is_active:
+                return doc
+        return None
+    
+    def delete_document(self, document_id: str) -> bool:
+        """Delete document from library and filesystem"""
+        documents = self.load_metadata()
+        doc_to_delete = None
+        
+        # Find document to delete
+        for i, doc in enumerate(documents):
+            if doc.document_id == document_id:
+                doc_to_delete = doc
+                documents.pop(i)
+                break
+        
+        if doc_to_delete:
+            # Delete physical file
+            file_path = os.path.join(UPLOAD_FOLDER, doc_to_delete.filename)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Deleted file: {file_path}")
+            
+            # Save updated metadata
+            self.save_metadata(documents)
+            logger.info(f"Deleted document from library: {doc_to_delete.original_filename}")
+            return True
+        
+        return False
+
+# Simplified Document Processing for Library System
+class SimpleDocumentProcessor:
+    """Simplified document processing for active document selection"""
+    
+    def enhance_context(self, query: str, full_context: str) -> str:
+        """Simple context enhancement - just truncate if too long"""
+        max_length = 2000  # 2KB context limit
+        
+        if not full_context:
+            return ""
+        
+        if len(full_context) <= max_length:
+            return full_context.strip()
+        
+        # Simple truncation
+        return full_context[:max_length] + "..."
+
+class SimplePromptEngineer:
+    """Simplified prompt engineering for document and general chat"""
+    
+    def create_document_prompt(self, query: str, context: str, conversation_history: List[Dict] = None) -> str:
+        """Create simple document analysis prompt"""
+        
+        conversation_context = ""
+        if conversation_history:
+            last_exchanges = conversation_history[-2:] if conversation_history else []
+            for msg in last_exchanges:
+                conversation_context += f"{msg.get('sender', 'User')}: {msg.get('content', '')[:200]}...\n"
+        
+        prompt = f"""DOKUMEN:
+{context}
+
+RIWAYAT:
+{conversation_context}
+
+PERTANYAAN: {query}
+
+Jawab berdasarkan dokumen di atas dengan informatif dan detail.
+
+JAWABAN:"""
+        
+        return prompt
+    
+    def create_general_prompt(self, query: str, conversation_history: List[Dict] = None) -> str:
+        """Create simple general conversation prompt"""
+        
+        conversation_context = ""
+        if conversation_history:
+            last_exchanges = conversation_history[-2:] if conversation_history else []
+            for msg in last_exchanges:
+                conversation_context += f"{msg.get('sender', 'User')}: {msg.get('content', '')[:150]}...\n"
+        
+        prompt = f"""{conversation_context}
+
+Pertanyaan: {query}
+Jawaban:"""
+        
+        return prompt
+
+# Simplified Performance Monitoring
+class SimplePerformanceMonitor:
+    """Simple performance monitoring for basic stats"""
+    
+    def __init__(self):
+        self.last_response_time = 0
+        
+    def add_response_time(self, response_time_ms: float):
+        """Add a response time measurement"""
+        self.last_response_time = response_time_ms
+    
+    def get_simple_status(self) -> str:
+        """Get simple performance status"""
+        if self.last_response_time < 5000:
+            return "excellent"
+        elif self.last_response_time < 15000:
+            return "good"
+        elif self.last_response_time < 45000:
+            return "slow"
+        else:
+            return "very_slow"
+
+# Simple Document Analysis Functions
+async def analyze_docx_structure(file_path: str) -> dict:
+    """Simple DOCX structure analysis"""
+    try:
+        doc = Document(file_path)
+        
+        return {
+            "document_type": "DOCX",
+            "paragraphs": len([p for p in doc.paragraphs if p.text.strip()]),
+            "tables": len(doc.tables),
+            "text_length": sum(len(p.text) for p in doc.paragraphs),
+        }
+    except Exception as e:
+        logger.error(f"Error analyzing DOCX: {e}")
+        return {"error": str(e)}
+
+async def analyze_pdf_structure(file_path: str) -> dict:
+    """Simple PDF structure analysis"""
+    try:
+        pdf_document = fitz.open(file_path)
+        
+        text_length = 0
+        images = 0
+        
+        for page_num in range(len(pdf_document)):
+            page = pdf_document[page_num]
+            text_length += len(page.get_text())
+            images += len(page.get_images())
+        
+        pdf_document.close()
+        
+        return {
+            "document_type": "PDF",
+            "pages": len(pdf_document),
+            "images": images,
+            "text_length": text_length,
+        }
+    except Exception as e:
+        logger.error(f"Error analyzing PDF: {e}")
+        return {"error": str(e)}
+
+# Simplified Response Processing Classes
+class ResponseCache:
+    """Simple in-memory cache for responses"""
+    
+    def __init__(self, max_size: int = 100, ttl_minutes: int = 30):
+        self.cache: Dict[str, Dict] = {}
+        self.max_size = max_size
+        self.ttl = timedelta(minutes=ttl_minutes)
+    
+    def _generate_key(self, prompt: str, context: str = None) -> str:
+        """Generate cache key"""
+        content = f"{prompt}:{context or ''}"
+        return hashlib.md5(content.encode()).hexdigest()
+    
+    def get(self, prompt: str, context: str = None) -> Optional[str]:
+        """Get cached response"""
+        key = self._generate_key(prompt, context)
+        
+        if key in self.cache:
+            entry = self.cache[key]
+            if datetime.now() - entry['timestamp'] < self.ttl:
+                return entry['response']
+            else:
+                del self.cache[key]
+        
+        return None
+    
+    def set(self, prompt: str, response: str, context: str = None):
+        """Cache a response"""
+        key = self._generate_key(prompt, context)
+        
+        if len(self.cache) >= self.max_size:
+            oldest_key = min(self.cache.keys(), 
+                           key=lambda k: self.cache[k]['timestamp'])
+            del self.cache[oldest_key]
+        
+        self.cache[key] = {
+            'response': response,
+            'timestamp': datetime.now()
+        }
+    
+    def clear(self):
+        """Clear cache"""
+        self.cache.clear()
+
+class ResponseMonitor:
+    """Simple response quality monitor"""
+    
+    def clean_response(self, text: str) -> str:
+        """Basic response cleaning"""
+        if not text or text.strip() == "":
+            return "Maaf, tidak ada jawaban yang dapat saya berikan."
+        
+        cleaned_text = text.strip()
+        
+        # Limit length if extremely long
+        if len(cleaned_text) > 2000:
+            cleaned_text = cleaned_text[:2000] + "..."
+        
+        return cleaned_text
 
 # AI Model Configuration System
 @dataclass
@@ -129,6 +442,18 @@ class AIModelOptimizer:
 # Initialize optimizer
 ai_optimizer = AIModelOptimizer()
 
+# Initialize document library
+document_library = DocumentLibrary()
+
+# Initialize simple processors
+doc_processor = SimpleDocumentProcessor()
+prompt_engineer = SimplePromptEngineer()
+
+# Initialize performance monitoring and caching
+performance_monitor = SimplePerformanceMonitor()
+response_cache = ResponseCache(max_size=200, ttl_minutes=60)
+response_monitor = ResponseMonitor()
+
 @app.post("/api/chat")
 async def chat_with_llama(request: ChatRequest):
     # Start timing
@@ -149,17 +474,36 @@ async def chat_with_llama(request: ChatRequest):
             logger.warning(f"⚠️ Long message detected: {len(request.message)} characters")
             logger.warning("Shorter, more specific questions typically get faster responses.")
 
-        # Enhanced prompt engineering with conversation history
+        # Enhanced prompt engineering with conversation history and active document
         prompt_start = time.time()
-        if request.context:
+        
+        # Check for active document if no context provided
+        final_context = request.context
+        active_doc_info = ""
+        
+        if not final_context:
+            # Check for active document in library
+            active_doc = document_library.get_active_document()
+            if active_doc:
+                # Load content from active document
+                file_path = os.path.join(UPLOAD_FOLDER, active_doc.filename)
+                if os.path.exists(file_path):
+                    try:
+                        final_context = await extract_text_from_document(file_path)
+                        active_doc_info = f"📄 Using active document: {active_doc.original_filename}"
+                        logger.info(f"Using active document: {active_doc.original_filename}")
+                    except Exception as e:
+                        logger.warning(f"Failed to load active document: {e}")
+        
+        if final_context:
             # SAFETY: Limit document context size to prevent timeout
-            if len(request.context) > 10000:  # Max 10KB context
-                logger.warning(f"⚠️ Large document truncated: {len(request.context)} → 10000 chars")
-                request.context = request.context[:10000] + "..."
+            if len(final_context) > 10000:  # Max 10KB context
+                logger.warning(f"⚠️ Large document truncated: {len(final_context)} → 10000 chars")
+                final_context = final_context[:10000] + "..."
             
             # Process document with enhanced intelligence and conversation history
             try:
-                enhanced_context = doc_processor.enhance_context(request.message, request.context)
+                enhanced_context = doc_processor.enhance_context(request.message, final_context)
                 optimized_prompt = prompt_engineer.create_document_prompt(
                     request.message, 
                     enhanced_context,
@@ -169,7 +513,7 @@ async def chat_with_llama(request: ChatRequest):
             except Exception as e:
                 logger.error(f"Document processing failed: {e}")
                 # Fallback to simple context
-                enhanced_context = request.context[:1500] + "..." if len(request.context) > 1500 else request.context
+                enhanced_context = final_context[:1500] + "..." if len(final_context) > 1500 else final_context
                 optimized_prompt = prompt_engineer.create_document_prompt(
                     request.message, 
                     enhanced_context,
@@ -189,14 +533,16 @@ async def chat_with_llama(request: ChatRequest):
         
         # Check cache first
         cache_start = time.time()
-        cached_response = response_cache.get(request.message, context=request.context)
+        cached_response = response_cache.get(request.message, context=final_context)
         cache_time = (time.time() - cache_start) * 1000
         logger.info(f"⚡ [TIMING] Cache check: {cache_time:.2f}ms")
         
         if cached_response:
             total_time = (time.time() - start_time) * 1000
             logger.info(f"🎯 [TIMING] CACHE HIT! Total response time: {total_time:.2f}ms")
-            return JSONResponse({
+            
+            # Add active document info to cached response if available
+            response_data = {
                 "response": cached_response,
                 "status": "complete",
                 "cached": True,
@@ -204,7 +550,12 @@ async def chat_with_llama(request: ChatRequest):
                     "total_ms": total_time,
                     "source": "cache"
                 }
-            })
+            }
+            
+            if active_doc_info:
+                response_data["document_info"] = active_doc_info
+            
+            return JSONResponse(response_data)
         
         # Prepare request payload
         payload_start = time.time()
@@ -270,7 +621,7 @@ async def chat_with_llama(request: ChatRequest):
                 cleaned_response = response_monitor.clean_response(ai_response)
                 
                 # Cache the response
-                response_cache.set(request.message, cleaned_response, request.context)
+                response_cache.set(request.message, cleaned_response, final_context)
                 
                 # Monitor performance
                 performance_monitor.add_response_time(ollama_time)
@@ -290,7 +641,8 @@ async def chat_with_llama(request: ChatRequest):
                 
                 logger.info(f"Final cleaned response length: {len(cleaned_response)} characters")
                 
-                return JSONResponse({
+                # Prepare response data
+                response_data = {
                     "response": cleaned_response,
                     "status": "complete",
                     "timing": {
@@ -307,7 +659,13 @@ async def chat_with_llama(request: ChatRequest):
                             "response_processing": processing_time
                         }
                     }
-                })
+                }
+                
+                # Add document info if active document was used
+                if active_doc_info:
+                    response_data["document_info"] = active_doc_info
+                
+                return JSONResponse(response_data)
             else:
                 error_msg = f"Ollama API returned status code {response.status_code}"
                 total_time = (time.time() - start_time) * 1000
@@ -616,6 +974,22 @@ async def upload_document(file: UploadFile = File(...)):
         )
         
         logger.info(f"Document processed successfully: {document_id}")
+        
+        # Add document metadata to library
+        document_metadata = DocumentMetadata(
+            document_id=document_id,
+            filename=f"{document_id}{file_extension}",
+            original_filename=file.filename,
+            upload_date=datetime.now().isoformat(),
+            file_size=os.path.getsize(file_path),
+            file_type=file_extension,
+            content_preview=full_content[:200],  # First 200 chars as preview
+            analysis_summary={},  # Empty summary for now
+            is_active=True  # Set as active document
+        )
+        
+        document_library.add_document(document_metadata)
+        
         return response
         
     except HTTPException:
@@ -624,255 +998,193 @@ async def upload_document(file: UploadFile = File(...)):
         logger.error(f"Error saat mengunggah dokumen: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error saat mengunggah dokumen: {str(e)}")
 
-# Endpoint untuk memeriksa status server
-@app.get("/api/status")
-async def get_server_status():
-    """Memeriksa status server dan dukungan format dokumen."""
+# Document Library API Endpoints
+
+@app.get("/api/documents")
+async def get_document_library():
+    """Get all documents in the library"""
     try:
-        # Periksa dukungan format dokumen
-        has_pdf_support = True
-        has_docx_support = True
-        requirements_installed = True
+        documents = document_library.get_all_documents()
         
-        try:
-            # Cek dukungan PDF
-            import PyPDF4
-            import fitz  # PyMuPDF
-        except ImportError as e:
-            has_pdf_support = False
-            requirements_installed = False
-            logger.warning(f"PDF support libraries missing: {e}")
-            
-        try:
-            # Cek dukungan DOCX
-            import docx2txt
-            from docx import Document
-        except ImportError as e:
-            has_docx_support = False
-            requirements_installed = False
-            logger.warning(f"DOCX support libraries missing: {e}")
-            
-        # Check Ollama connection
-        ollama_status = "disconnected"
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get("http://localhost:11434/api/tags")
-                if response.status_code == 200:
-                    ollama_status = "connected"
-                else:
-                    ollama_status = "error"
-        except:
-            ollama_status = "disconnected"
+        # Convert to response format
+        response_docs = []
+        for doc in documents:
+            response_docs.append({
+                "document_id": doc.document_id,
+                "filename": doc.original_filename,
+                "upload_date": doc.upload_date,
+                "file_size": doc.file_size,
+                "file_type": doc.file_type,
+                "content_preview": doc.content_preview,
+                "is_active": doc.is_active,
+                "analysis_summary": doc.analysis_summary
+            })
         
-        # Get performance status
-        performance_status = performance_monitor.get_simple_status()
+        # Sort by upload date (newest first)
+        response_docs.sort(key=lambda x: x["upload_date"], reverse=True)
         
         return {
-            "running": True,
-            "version": "1.0.0",
-            "message": "Server berjalan dengan baik",
-            "hasPdfSupport": has_pdf_support,
-            "hasDocxSupport": has_docx_support,
-            "requirementsInstalled": requirements_installed,
-            "ollama_status": ollama_status,
-            "performance": performance_status
+            "documents": response_docs,
+            "total_count": len(response_docs),
+            "active_document": next((doc for doc in response_docs if doc["is_active"]), None)
         }
+        
     except Exception as e:
-        logger.error(f"Error saat memeriksa status server: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "running": True,
-                "version": "1.0.0",
-                "message": f"Error: {str(e)}",
-                "hasPdfSupport": False,
-                "hasDocxSupport": False,
-                "requirementsInstalled": False
+        logger.error(f"Error getting document library: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting documents: {str(e)}")
+
+@app.get("/api/documents/{document_id}")
+async def get_document_details(document_id: str):
+    """Get detailed information about a specific document"""
+    try:
+        doc = document_library.get_document(document_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Get full content
+        file_path = os.path.join(UPLOAD_FOLDER, doc.filename)
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Document file not found")
+        
+        # Extract full content again (cached version)
+        full_content = await extract_text_from_document(file_path)
+        
+        return {
+            "document_id": doc.document_id,
+            "filename": doc.original_filename,
+            "upload_date": doc.upload_date,
+            "file_size": doc.file_size,
+            "file_type": doc.file_type,
+            "content": full_content,
+            "content_preview": doc.content_preview,
+            "is_active": doc.is_active,
+            "analysis_summary": doc.analysis_summary
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting document details: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting document: {str(e)}")
+
+@app.post("/api/documents/{document_id}/select")
+async def select_document(document_id: str):
+    """Select a document as the active document for chat"""
+    try:
+        success = document_library.set_active_document(document_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Get the newly active document
+        active_doc = document_library.get_active_document()
+        
+        return {
+            "success": True,
+            "message": f"Document '{active_doc.original_filename}' selected successfully",
+            "active_document": {
+                "document_id": active_doc.document_id,
+                "filename": active_doc.original_filename,
+                "file_type": active_doc.file_type,
+                "upload_date": active_doc.upload_date,
+                "content_preview": active_doc.content_preview
             }
-        )
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error selecting document: {e}")
+        raise HTTPException(status_code=500, detail=f"Error selecting document: {str(e)}")
 
-# AI Model Management - Removed unused endpoints
+@app.delete("/api/documents/{document_id}")
+async def delete_document_from_library(document_id: str):
+    """Delete a document from the library"""
+    try:
+        # Get document info before deletion
+        doc = document_library.get_document(document_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        success = document_library.delete_document(document_id)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete document")
+        
+        return {
+            "success": True,
+            "message": f"Document '{doc.original_filename}' deleted successfully",
+            "deleted_document_id": document_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting document: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting document: {str(e)}")
 
-# Document Intelligence System
-class DocumentProcessor:
-    """Advanced document processing for better context understanding"""
-    
-    def __init__(self):
-        self.chunk_size = 1000
-        self.overlap = 200
-    
-    def split_document(self, text: str) -> List[str]:
-        """Split document into overlapping chunks for better context"""
-        if not text or len(text.strip()) == 0:
-            return []
+@app.post("/api/documents/clear-selection")
+async def clear_document_selection():
+    """Clear active document selection"""
+    try:
+        documents = document_library.get_all_documents()
         
-        # Safety limits to prevent infinite loops
-        if len(text) > 50000:  # Max 50KB text processing
-            text = text[:50000] + "..."
+        # Set all documents as inactive
+        for doc in documents:
+            doc.is_active = False
         
-        chunks = []
-        step_size = max(1, self.chunk_size - self.overlap)  # Ensure step_size is at least 1
+        document_library.save_metadata(documents)
         
-        for i in range(0, len(text), step_size):
-            chunk = text[i:i + self.chunk_size]
-            if chunk.strip():
-                chunks.append(chunk.strip())
-            
-            # Safety break to prevent infinite loops
-            if len(chunks) >= 50:  # Max 50 chunks
-                break
-                
-        return chunks
-    
-    def find_relevant_chunks(self, query: str, chunks: List[str], max_chunks: int = 3) -> List[str]:
-        """Find most relevant chunks based on keyword matching"""
-        query_words = set(query.lower().split())
-        chunk_scores = []
+        return {
+            "success": True,
+            "message": "Document selection cleared"
+        }
         
-        for chunk in chunks:
-            chunk_words = set(chunk.lower().split())
-            score = len(query_words.intersection(chunk_words))
-            chunk_scores.append((chunk, score))
-        
-        # Sort by relevance score
-        chunk_scores.sort(key=lambda x: x[1], reverse=True)
-        return [chunk for chunk, score in chunk_scores[:max_chunks] if score > 0]
-    
-    def enhance_context(self, query: str, full_context: str) -> str:
-        """Create enhanced context with relevant chunks (GAMING LAPTOP optimization)"""
-        
-        # GENEROUS limits for gaming laptop with 22GB RAM
-        max_context_length = 2000  # Much larger context
-        max_chunks = 3             # More chunks for better analysis
-        
-        # Safety check - prevent processing huge documents
-        if not full_context or len(full_context.strip()) == 0:
-            return ""
-        
-        # With 22GB RAM, we can process larger contexts
-        if len(full_context) <= max_context_length:
-            return full_context.strip()
-        
-        try:
-            # Full processing for gaming laptop
-            chunks = self.split_document(full_context)
-            
-            # With good RAM, process more chunks
-            if len(chunks) > 30:  # Increased from 10
-                chunks = chunks[:30]
-            
-            relevant_chunks = self.find_relevant_chunks(query, chunks, max_chunks=max_chunks)
-            
-            if not relevant_chunks:
-                # Use first chunks if no relevance found
-                relevant_chunks = chunks[:max_chunks] if chunks else []
-            
-            # Join chunks with generous length
-            combined_context = "\n\n".join(relevant_chunks)
-            
-            if len(combined_context) > max_context_length:
-                combined_context = combined_context[:max_context_length] + "..."
-                
-            return combined_context.strip()
-            
-        except Exception as e:
-            # Fallback: return larger truncated context
-            logger.warning(f"Document processing failed: {e}")
-            return full_context[:max_context_length] + "..." if len(full_context) > max_context_length else full_context
+    except Exception as e:
+        logger.error(f"Error clearing document selection: {e}")
+        raise HTTPException(status_code=500, detail=f"Error clearing selection: {str(e)}")
 
-# Advanced Prompt Engineering System
-class PromptEngineer:
-    """Intelligent prompt engineering for better responses"""
-    
-    def __init__(self):
-        self.conversation_history = []
-    
-    def create_document_prompt(self, query: str, context: str, conversation_history: List[Dict] = None) -> str:
-        """Create optimized prompt with conversation history"""
+@app.get("/api/documents/active")
+async def get_active_document():
+    """Get the currently active document"""
+    try:
+        active_doc = document_library.get_active_document()
         
-        # Balanced context limits for optimal performance
-        limited_context = context[:4000]   # Reasonable context size
-        conversation_context = ""
-        if conversation_history:
-            last_exchanges = conversation_history[-3:] if conversation_history else []
-            for msg in last_exchanges:
-                conversation_context += f"{msg.get('sender', 'User')}: {msg.get('content', '')[:300]}...\n"
+        if not active_doc:
+            return {
+                "active_document": None,
+                "message": "No active document selected"
+            }
         
-        # Optimized prompt for document analysis
-        prompt = f"""DOKUMEN:
-{limited_context}
-
-RIWAYAT PERCAKAPAN:
-{conversation_context}
-
-PERTANYAAN: {query}
-
-INSTRUKSI: Analisis dokumen dan berikan jawaban yang informatif dan detail berdasarkan konteks dokumen. Jelaskan dengan lengkap dan jelas.
-
-JAWABAN:"""
+        # Get full content
+        file_path = os.path.join(UPLOAD_FOLDER, active_doc.filename)
+        if not os.path.exists(file_path):
+            return {
+                "active_document": None,
+                "message": "Active document file not found"
+            }
         
-        return prompt
-    
-    def create_general_prompt(self, query: str, conversation_history: List[Dict] = None) -> str:
-        """Create optimized general conversation prompt with history"""
+        # Extract full content again (cached version)
+        full_content = await extract_text_from_document(file_path)
         
-        conversation_context = ""
-        if conversation_history:
-            # Last 3 exchanges for balanced performance
-            last_exchanges = conversation_history[-3:] if conversation_history else []
-            for msg in last_exchanges:
-                conversation_context += f"{msg.get('sender', 'User')}: {msg.get('content', '')[:150]}...\n"
+        return {
+            "active_document": {
+                "document_id": active_doc.document_id,
+                "filename": active_doc.original_filename,
+                "file_type": active_doc.file_type,
+                "upload_date": active_doc.upload_date,
+                "content_preview": active_doc.content_preview,
+                "content": full_content
+            }
+        }
         
-        # Optimized prompt for natural conversation
-        prompt = f"""{conversation_context}
+    except Exception as e:
+        logger.error(f"Error getting active document: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting active document: {str(e)}")
 
-Pertanyaan: {query}
-Jawaban:"""
-        
-        return prompt
-
-# Initialize processors
-doc_processor = DocumentProcessor()
-prompt_engineer = PromptEngineer()
-
-# Root endpoint
-@app.get("/")
-async def read_root():
-    return {"message": "Welcome to FastAPI"}
-
-@app.exception_handler(Exception)
-async def generic_exception_handler(request, exc):
-    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": f"An unexpected error occurred: {str(exc)}"}
-    )
-# Performance stats endpoint removed - not used by frontend
-# Simplified Performance Monitoring
-class SimplePerformanceMonitor:
-    """Simple performance monitoring for basic stats"""
-    
-    def __init__(self):
-        self.last_response_time = 0
-        
-    def add_response_time(self, response_time_ms: float):
-        """Add a response time measurement"""
-        self.last_response_time = response_time_ms
-    
-    def get_simple_status(self) -> str:
-        """Get simple performance status"""
-        if self.last_response_time < 5000:
-            return "excellent"
-        elif self.last_response_time < 15000:
-            return "good"
-        elif self.last_response_time < 45000:
-            return "slow"
-        else:
-            return "very_slow"
-
-# AI Response Caching System
+# Simplified Response Processing Classes
 class ResponseCache:
-    """Simple in-memory cache for AI responses to improve speed"""
+    """Simple in-memory cache for responses"""
     
     def __init__(self, max_size: int = 100, ttl_minutes: int = 30):
         self.cache: Dict[str, Dict] = {}
@@ -880,21 +1192,19 @@ class ResponseCache:
         self.ttl = timedelta(minutes=ttl_minutes)
     
     def _generate_key(self, prompt: str, context: str = None) -> str:
-        """Generate cache key from prompt and context"""
+        """Generate cache key"""
         content = f"{prompt}:{context or ''}"
         return hashlib.md5(content.encode()).hexdigest()
     
     def get(self, prompt: str, context: str = None) -> Optional[str]:
-        """Get cached response if available and not expired"""
+        """Get cached response"""
         key = self._generate_key(prompt, context)
         
         if key in self.cache:
             entry = self.cache[key]
             if datetime.now() - entry['timestamp'] < self.ttl:
-                logger.info(f"Cache hit for prompt: {prompt[:50]}...")
                 return entry['response']
             else:
-                # Remove expired entry
                 del self.cache[key]
         
         return None
@@ -903,7 +1213,6 @@ class ResponseCache:
         """Cache a response"""
         key = self._generate_key(prompt, context)
         
-        # Remove oldest entries if cache is full
         if len(self.cache) >= self.max_size:
             oldest_key = min(self.cache.keys(), 
                            key=lambda k: self.cache[k]['timestamp'])
@@ -913,280 +1222,23 @@ class ResponseCache:
             'response': response,
             'timestamp': datetime.now()
         }
-        logger.info(f"Cached response for prompt: {prompt[:50]}...")
     
     def clear(self):
-        """Clear all cached responses"""
+        """Clear cache"""
         self.cache.clear()
-        logger.info("Cache cleared")
 
-# Response Quality Monitor
 class ResponseMonitor:
-    """Monitor and filter AI responses for quality"""
-    
-    def __init__(self):
-        self.repetition_threshold = 3
-        self.max_response_length = 1000
-    
-    def is_response_looping(self, text: str) -> bool:
-        """Detect if response is in a loop"""
-        if not text:
-            return False
-        
-        # Check for common loop patterns
-        loop_patterns = [
-            "HaiHaiiii", "IsIsiIsi", "dokdokumen", 
-            "baik-baik-baik", "Haiii,Haiii"
-        ]
-        
-        for pattern in loop_patterns:
-            if pattern in text:
-                return True
-                
-        # Check for character repetition
-        if len(set(text[:20])) < 3:  # If first 20 chars have less than 3 unique chars
-            return True
-            
-        # Check for excessive repetition
-        words = text.split()
-        if len(words) > 5:
-            first_word = words[0]
-            if text.count(first_word) > len(words) // 2:
-                return True
-                
-        return False
+    """Simple response quality monitor"""
     
     def clean_response(self, text: str) -> str:
-        """Clean and format response (less aggressive)"""
+        """Basic response cleaning"""
         if not text or text.strip() == "":
-            return "Maaf, saya tidak dapat memberikan jawaban yang tepat. Silakan coba pertanyaan yang berbeda."
-            
-        # Remove loop patterns (only extreme cases)
-        loop_patterns = [
-            "HaiHaiiii", "IsIsiIsi", "Haiii,Haiii"
-        ]
+            return "Maaf, tidak ada jawaban yang dapat saya berikan."
         
         cleaned_text = text.strip()
         
-        # Only clean if there are obvious loop patterns
-        for pattern in loop_patterns:
-            if pattern in cleaned_text:
-                # If loop detected, return error message
-                return "Maaf, terjadi kesalahan dalam pemrosesan. Silakan coba lagi dengan pertanyaan yang berbeda."
-        
-        # Basic cleaning only
-        cleaned_text = cleaned_text.strip()
-        
-        # Limit length only if extremely long
-        if len(cleaned_text) > 2000:  # Increased from 1000
+        # Limit length if extremely long
+        if len(cleaned_text) > 2000:
             cleaned_text = cleaned_text[:2000] + "..."
-            
-        return cleaned_text if cleaned_text else "Maaf, tidak ada jawaban yang dapat saya berikan."
-
-# Model Preloading System for Speed Optimization
-# Remove the entire ModelPreloader and OllamaOptimizer classes
-
-# Initialize all components
-ai_optimizer = AIModelOptimizer()
-response_cache = ResponseCache(max_size=200, ttl_minutes=60)  # 1 hour TTL
-response_monitor = ResponseMonitor()
-# Initialize simple performance monitor
-performance_monitor = SimplePerformanceMonitor()
-
-# Startup and Shutdown Events
-@app.on_event("startup")
-async def startup_event():
-    """Initialize application on startup"""
-    logger.info("🚀 Starting FastAPI application...")
-    logger.info("✅ Document processing system ready")
-    logger.info("⚡ Application startup complete with speed optimizations")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    logger.info("Shutting down FastAPI application...")
-    response_cache.clear()
-
-# Entry point untuk menjalankan server
-if __name__ == "__main__":
-    import uvicorn
-    
-    print("🚀 Starting FastAPI AI Chat Backend Server...")
-    print("📍 Server akan berjalan di: http://localhost:8000")
-    print("📚 API Documentation: http://localhost:8000/docs")
-    print("🔄 Hot reload: Enabled")
-    print("⚡ Mode: Development")
-    print("\n" + "="*50)
-    print("💡 Untuk menghentikan server: Ctrl+C")
-    print("="*50 + "\n")
-    
-    try:
-        uvicorn.run(
-            "main:app",
-            host="0.0.0.0",
-            port=8000,
-            reload=True,
-            log_level="info"
-        )
-    except KeyboardInterrupt:
-        print("\n🛑 Server dihentikan oleh user")
-    except Exception as e:
-        print(f"\n❌ Error saat menjalankan server: {e}")
-        print("💡 Pastikan port 8000 tidak digunakan aplikasi lain")
-        print("💡 Coba jalankan: netstat -ano | findstr :8000")
-
-# Endpoint untuk analisis detail dokumen
-@app.post("/api/analyze_document")
-async def analyze_document_details(file: UploadFile = File(...)):
-    """Analisis detail dokumen tanpa menyimpan file."""
-    logger.info(f"Analyzing document: {file.filename}")
-    
-    try:
-        # Validasi tipe file
-        if not file.filename:
-            raise HTTPException(status_code=400, detail="Filename tidak boleh kosong")
-            
-        file_extension = os.path.splitext(file.filename)[1].lower()
         
-        if file_extension not in ['.pdf', '.docx']:
-            raise HTTPException(
-                status_code=400,
-                detail="Format file tidak didukung. Hanya PDF dan DOCX yang diizinkan."
-            )
-        
-        # Buat file temporary untuk analisis
-        temp_id = str(uuid.uuid4())
-        temp_path = os.path.join(UPLOAD_FOLDER, f"temp_{temp_id}{file_extension}")
-        
-        try:
-            # Simpan temporary
-            with open(temp_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-            
-            # Analisis dengan fungsi advanced
-            analysis_result = {}
-            
-            if file_extension == '.docx':
-                analysis_result = await analyze_docx_structure(temp_path)
-            elif file_extension == '.pdf':
-                analysis_result = await analyze_pdf_structure(temp_path)
-            
-            analysis_result.update({
-                "filename": file.filename,
-                "file_type": file_extension,
-                "file_size": os.path.getsize(temp_path)
-            })
-            
-            return analysis_result
-            
-        finally:
-            # Hapus file temporary
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-                
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error analyzing document: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error analyzing document: {str(e)}")
-
-async def analyze_docx_structure(file_path: str) -> dict:
-    """Analisis struktur detail dokumen DOCX."""
-    try:
-        doc = Document(file_path)
-        
-        analysis = {
-            "document_type": "DOCX",
-            "paragraphs": len([p for p in doc.paragraphs if p.text.strip()]),
-            "tables": len(doc.tables),
-            "images": 0,
-            "headings": 0,
-            "text_length": 0,
-            "styles_used": set(),
-            "has_header_footer": False
-        }
-        
-        # Analisis paragraf dan style
-        for paragraph in doc.paragraphs:
-            if paragraph.text.strip():
-                analysis["text_length"] += len(paragraph.text)
-                analysis["styles_used"].add(paragraph.style.name)
-                
-                if paragraph.style.name.startswith('Heading'):
-                    analysis["headings"] += 1
-        
-        # Hitung gambar
-        for rel in doc.part.rels.values():
-            if "image" in rel.target_ref:
-                analysis["images"] += 1
-        
-        # Konversi set ke list untuk JSON serialization
-        analysis["styles_used"] = list(analysis["styles_used"])
-        
-        # Deteksi header/footer
-        try:
-            for section in doc.sections:
-                if section.header.paragraphs or section.footer.paragraphs:
-                    analysis["has_header_footer"] = True
-                    break
-        except:
-            pass
-        
-        return analysis
-        
-    except Exception as e:
-        logger.error(f"Error analyzing DOCX structure: {e}")
-        return {"error": str(e)}
-
-async def analyze_pdf_structure(file_path: str) -> dict:
-    """Analisis struktur detail dokumen PDF."""
-    try:
-        pdf_document = fitz.open(file_path)
-        
-        analysis = {
-            "document_type": "PDF",
-            "pages": len(pdf_document),
-            "images": 0,
-            "text_length": 0,
-            "has_bookmarks": False,
-            "has_forms": False,
-            "metadata": {}
-        }
-        
-        # Ekstrak metadata
-        metadata = pdf_document.metadata
-        analysis["metadata"] = {
-            "title": metadata.get('title', ''),
-            "author": metadata.get('author', ''),
-            "subject": metadata.get('subject', ''),
-            "creator": metadata.get('creator', ''),
-            "producer": metadata.get('producer', ''),
-            "creation_date": metadata.get('creationDate', ''),
-            "modification_date": metadata.get('modDate', '')
-        }
-        
-        # Analisis per halaman
-        for page_num in range(len(pdf_document)):
-            page = pdf_document[page_num]
-            
-            # Hitung teks
-            text = page.get_text()
-            analysis["text_length"] += len(text)
-            
-            # Hitung gambar
-            image_list = page.get_images()
-            analysis["images"] += len(image_list)
-        
-        # Cek bookmark
-        try:
-            toc = pdf_document.get_toc()
-            analysis["has_bookmarks"] = len(toc) > 0
-        except:
-            pass
-        
-        pdf_document.close()
-        return analysis
-        
-    except Exception as e:
-        logger.error(f"Error analyzing PDF structure: {e}")
-        return {"error": str(e)}
+        return cleaned_text
