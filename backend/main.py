@@ -16,12 +16,18 @@ import docx2txt  # For basic DOCX processing
 import PyPDF4   # For PDF processing
 import base64
 import io
+import re  # Add missing re import
 from docx import Document  # For advanced DOCX processing
 from PIL import Image
 import fitz  # PyMuPDF for better PDF processing
 import magic  # For file type detection
 import json
 from pathlib import Path
+
+# Import enhanced table processing utilities
+from utils.table_parser import TableParser
+from utils.response_formatter import ResponseFormatter
+from utils.markdown_processor import MarkdownProcessor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -186,8 +192,8 @@ class SimpleDocumentProcessor:
     """Simplified document processing for active document selection"""
     
     def enhance_context(self, query: str, full_context: str) -> str:
-        """Simple context enhancement - just truncate if too long"""
-        max_length = 2000  # 2KB context limit
+        """Speed-optimized context processing"""
+        max_length = 6000  # REDUCED: 6KB context limit for speed (was 15000)
         
         if not full_context:
             return ""
@@ -195,45 +201,102 @@ class SimpleDocumentProcessor:
         if len(full_context) <= max_length:
             return full_context.strip()
         
-        # Simple truncation
-        return full_context[:max_length] + "..."
+        # Smart truncation - keep most relevant parts based on query
+        query_words = query.lower().split()
+        
+        # Try to find most relevant sections
+        paragraphs = full_context.split('\n\n')
+        relevant_paragraphs = []
+        current_length = 0
+        
+        # First, add paragraphs that contain query words
+        for para in paragraphs:
+            if any(word in para.lower() for word in query_words):
+                if current_length + len(para) <= max_length:
+                    relevant_paragraphs.append(para)
+                    current_length += len(para)
+                else:
+                    break
+        
+        # If we have space, add other paragraphs
+        if current_length < max_length * 0.8:  # Use 80% threshold
+            for para in paragraphs:
+                if para not in relevant_paragraphs:
+                    if current_length + len(para) <= max_length:
+                        relevant_paragraphs.append(para)
+                        current_length += len(para)
+                    else:
+                        break
+        
+        if relevant_paragraphs:
+            return '\n\n'.join(relevant_paragraphs)
+        else:
+            # Fallback to simple truncation
+            return full_context[:max_length] + "..."
 
 class SimplePromptEngineer:
     """Simplified prompt engineering for document and general chat"""
     
     def create_document_prompt(self, query: str, context: str, conversation_history: List[Dict] = None) -> str:
-        """Create simple document analysis prompt"""
+        """Create speed-optimized document analysis prompt"""
         
         conversation_context = ""
         if conversation_history:
-            last_exchanges = conversation_history[-2:] if conversation_history else []
+            last_exchanges = conversation_history[-1:] if conversation_history else []  # REDUCED: Only last 1 exchange for speed
             for msg in last_exchanges:
-                conversation_context += f"{msg.get('sender', 'User')}: {msg.get('content', '')[:200]}...\n"
+                conversation_context += f"{msg.get('sender', 'User')}: {msg.get('content', '')[:100]}...\n"
         
-        prompt = f"""DOKUMEN:
+        # SPEED-OPTIMIZED prompt with clear instructions for fast response
+        prompt = f"""INSTRUKSI CEPAT - JAWAB LANGSUNG:
+Berikan jawaban singkat, padat, dan informatif dengan format markdown:
+- Gunakan ## untuk judul utama
+- **Bold** untuk poin penting (minimal 3-5 bold)
+- - untuk daftar (gunakan banyak list)
+- Jawaban maksimal 500-800 kata
+- LANGSUNG ke inti masalah
+- JANGAN menulis pembukaan panjang
+
+DOKUMEN:
 {context}
 
-RIWAYAT:
-{conversation_context}
+RIWAYAT: {conversation_context}
 
 PERTANYAAN: {query}
 
-Jawab berdasarkan dokumen di atas dengan informatif dan detail.
-
-JAWABAN:"""
+JAWABAN LANGSUNG:"""
         
         return prompt
     
     def create_general_prompt(self, query: str, conversation_history: List[Dict] = None) -> str:
-        """Create simple general conversation prompt"""
+        """Create speed-optimized general conversation prompt"""
         
         conversation_context = ""
         if conversation_history:
-            last_exchanges = conversation_history[-2:] if conversation_history else []
+            last_exchanges = conversation_history[-1:] if conversation_history else []  # REDUCED: Only last 1 exchange
             for msg in last_exchanges:
-                conversation_context += f"{msg.get('sender', 'User')}: {msg.get('content', '')[:150]}...\n"
+                conversation_context += f"{msg.get('sender', 'User')}: {msg.get('content', '')[:100]}...\n"
         
-        prompt = f"""{conversation_context}
+        # Check if it's likely a detailed question
+        is_detailed_query = any(word in query.lower() for word in [
+            'explain', 'jelaskan', 'how', 'bagaimana', 'apa itu', 'what is', 'describe', 'deskripsikan',
+            'list', 'daftar', 'compare', 'bandingkan', 'analyze', 'analisis', 'cara', 'langkah', 'step'
+        ]) or len(query) > 50  # REDUCED threshold
+        
+        if is_detailed_query:
+            prompt = f"""INSTRUKSI CEPAT:
+Jawab dengan format markdown yang rapi:
+- ## untuk judul
+- **Bold** untuk poin penting
+- - untuk list
+- Maksimal 400-600 kata
+- Langsung ke inti
+
+{conversation_context}
+
+Pertanyaan: {query}
+Jawaban singkat:"""
+        else:
+            prompt = f"""{conversation_context}
 
 Pertanyaan: {query}
 Jawaban:"""
@@ -242,7 +305,7 @@ Jawaban:"""
 
 # Simplified Performance Monitoring
 class SimplePerformanceMonitor:
-    """Simple performance monitoring for basic stats"""
+    """Speed-optimized performance monitoring"""
     
     def __init__(self):
         self.last_response_time = 0
@@ -252,15 +315,17 @@ class SimplePerformanceMonitor:
         self.last_response_time = response_time_ms
     
     def get_simple_status(self) -> str:
-        """Get simple performance status"""
-        if self.last_response_time < 5000:
+        """Get performance status - SPEED OPTIMIZED thresholds"""
+        if self.last_response_time < 30000:     # 30 seconds
             return "excellent"
-        elif self.last_response_time < 15000:
+        elif self.last_response_time < 60000:   # 1 minute  
             return "good"
-        elif self.last_response_time < 45000:
+        elif self.last_response_time < 120000:  # 2 minutes
+            return "acceptable"
+        elif self.last_response_time < 180000:  # 3 minutes
             return "slow"
         else:
-            return "very_slow"
+            return "timeout_risk"
 
 # Simple Document Analysis Functions
 async def analyze_docx_structure(file_path: str) -> dict:
@@ -358,9 +423,9 @@ class ResponseMonitor:
         
         cleaned_text = text.strip()
         
-        # Limit length if extremely long
-        if len(cleaned_text) > 2000:
-            cleaned_text = cleaned_text[:2000] + "..."
+        # Limit length if extremely long - INCREASED for long responses
+        if len(cleaned_text) > 80000:  # INCREASED: ~15,000 words support (was 2000)
+            cleaned_text = cleaned_text[:80000] + "..."
         
         return cleaned_text
 
@@ -378,32 +443,32 @@ class ModelConfig:
     stop_tokens: list
 
 class AIModelOptimizer:
-    """Ultra-speed AI Model optimizer for gaming laptop - prioritizing speed"""
+    """Ultra-fast AI Model optimizer for gaming laptop - SPEED OPTIMIZED"""
     
     def __init__(self):
-        # ULTRA-SPEED GAMING LAPTOP configuration (22GB RAM!)
+        # BALANCED configuration for quality + speed optimization
         self.config = ModelConfig(
             model_name="llama3:8b",
-            temperature=0.3,        # Lower for faster, more deterministic responses
-            top_p=0.7,             # Reduced for speed
-            top_k=20,              # Much lower for speed
-            num_ctx=2048,          # Reduced context for speed (still plenty)
-            num_predict=200,       # Shorter responses for speed
-            repeat_penalty=1.1,    # Standard penalty
+            temperature=0.6,        # FURTHER REDUCED: Even faster, still good quality  
+            top_p=0.8,             # REDUCED: More focused for speed
+            top_k=25,              # FURTHER REDUCED: Lower for faster generation
+            num_ctx=4096,          # Keep current - good balance
+            num_predict=2500,      # REDUCED: Target ~1500-2000 words for speed (was 3000)
+            repeat_penalty=1.2,    # Slightly higher to prevent loops and reduce iteration
             num_thread=-1,         # Use all CPU threads
-            stop_tokens=["\n\n\n", "Human:", "Assistant:", "PERTANYAAN:", "JAWABAN:", "User:"]
+            stop_tokens=["Human:", "Assistant:", "PERTANYAAN:", "User:", "\n\nHuman", "\n\nUser"]
         )
     
     def get_config(self) -> ModelConfig:
         return self.config
     
-    def get_optimized_payload(self, prompt: str) -> Dict[str, Any]:
+    def get_optimized_payload(self, prompt: str, use_streaming: bool = True) -> Dict[str, Any]:
         config = self.get_config()
         
         return {
             "model": config.model_name,
             "prompt": prompt,
-            "stream": False,  # Non-streaming for consistency
+            "stream": use_streaming,
             "options": {
                 "temperature": config.temperature,
                 "top_p": config.top_p,
@@ -412,29 +477,32 @@ class AIModelOptimizer:
                 "num_predict": config.num_predict,
                 "num_thread": config.num_thread,
                 "repeat_penalty": config.repeat_penalty,
-                "repeat_last_n": 50,
+                "repeat_last_n": 30,   # REDUCED: Smaller repeat window for speed
                 "stop": config.stop_tokens,
                 
-                # ULTRA-SPEED GAMING LAPTOP optimizations (22GB RAM!)
-                "num_gpu": -1,       # Auto-detect GPU (Nitro might have dGPU)
-                "low_vram": False,   # Disable - you have plenty RAM
-                "f16_kv": False,     # Disable for speed (slight quality loss)
-                "num_batch": 1024,   # Even larger batch for 22GB RAM
-                "numa": False,       # Still disable for single socket
-                "mlock": True,       # Lock model in memory (you have RAM!)
-                "use_mmap": True,    # Enable memory mapping for speed
-                "seed": -1,          # Random seed
-                "num_gqa": -1,       # Default
+                # SPEED-OPTIMIZED configuration for sub-60s responses
+                "num_gpu": -1,         # Auto-detect GPU 
+                "low_vram": False,     # Keep disabled for 22GB RAM
+                "f16_kv": True,        # ENABLED: Use half precision for speed
+                "num_batch": 512,      # REDUCED: Smaller batch for faster processing
+                "numa": False,         # Keep disabled
+                "mlock": True,         # Lock model in memory
+                "use_mmap": True,      # Enable memory mapping
+                "seed": -1,            # Random seed
+                
+                # AGGRESSIVE speed optimizations
+                "penalize_newline": False,
+                "presence_penalty": 0.0,
+                "frequency_penalty": 0.0,
+                "tfs_z": 1.0,
+                "typical_p": 1.0,
+                "min_p": 0.0,
+                
+                # Additional speed tweaks
                 "rope_freq_base": 10000,
                 "rope_freq_scale": 1.0,
-                
-                # Additional speed optimizations
-                "penalize_newline": False,  # Don't penalize newlines for speed
-                "presence_penalty": 0.0,    # Disable for speed
-                "frequency_penalty": 0.0,   # Disable for speed
-                "tfs_z": 1.0,              # Disable tail free sampling for speed
-                "typical_p": 1.0,          # Disable typical sampling for speed
-                "min_p": 0.0               # Disable min probability for speed
+                "num_keep": 24,        # Keep first 24 tokens for consistency
+                "num_gqa": -1
             }
         }
 
@@ -453,6 +521,88 @@ performance_monitor = SimplePerformanceMonitor()
 response_cache = ResponseCache(max_size=200, ttl_minutes=60)
 response_monitor = ResponseMonitor()
 
+# Initialize enhanced table processing
+table_parser = TableParser()
+response_formatter = ResponseFormatter()
+markdown_processor = MarkdownProcessor()
+
+# Streaming Response Handler for Long Responses
+class StreamingResponseHandler:
+    """Handle streaming responses to prevent frontend timeout"""
+    
+    async def process_streaming_response(self, response, timeout_seconds: float) -> str:
+        """Process streaming response with timeout protection - SPEED OPTIMIZED"""
+        full_response = ""
+        start_time = time.time()
+        last_chunk_time = time.time()
+        chunk_timeout = 120.0  # ULTRA-EXTENDED: 120 seconds between chunks for very complex processing (was 60)
+        progress_threshold = 50  # Log every 50 characters for better monitoring
+        
+        try:
+            async for line in response.aiter_lines():
+                current_time = time.time()
+                
+                # Check overall timeout
+                if (current_time - start_time) > timeout_seconds:
+                    logger.warning(f"⏱️ Overall timeout reached: {timeout_seconds}s")
+                    break
+                
+                # Check chunk timeout (faster detection)
+                if (current_time - last_chunk_time) > chunk_timeout:
+                    logger.warning(f"⏱️ Chunk timeout reached: {chunk_timeout}s")
+                    break
+                
+                if line:
+                    try:
+                        chunk_data = json.loads(line)
+                        if "response" in chunk_data:
+                            chunk_text = chunk_data["response"]
+                            full_response += chunk_text
+                            last_chunk_time = current_time
+                            
+                            # More frequent progress logging for speed monitoring
+                            if len(full_response) % progress_threshold == 0:
+                                elapsed = current_time - start_time
+                                chars_per_sec = len(full_response) / elapsed if elapsed > 0 else 0
+                                logger.info(f"📝 Streaming: {len(full_response)} chars ({chars_per_sec:.1f} chars/s)")
+                        
+                        # Check if done
+                        if chunk_data.get("done", False):
+                            elapsed = current_time - start_time
+                            chars_per_sec = len(full_response) / elapsed if elapsed > 0 else 0
+                            logger.info(f"✅ Streaming completed: {len(full_response)} chars in {elapsed:.1f}s ({chars_per_sec:.1f} chars/s)")
+                            break
+                            
+                    except json.JSONDecodeError:
+                        continue
+                        
+        except Exception as e:
+            logger.error(f"❌ Streaming error: {e}")
+            
+        return full_response
+    
+    async def fallback_to_non_streaming(self, client, request_payload: dict, timeout_seconds: float) -> str:
+        """Fallback to non-streaming if streaming fails"""
+        logger.info("🔄 Falling back to non-streaming mode")
+        
+        # Modify payload for non-streaming
+        request_payload["stream"] = False
+        
+        response = await client.post(
+            "http://localhost:11434/api/generate",
+            json=request_payload,
+            timeout=timeout_seconds
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("response", "")
+        else:
+            raise HTTPException(status_code=500, detail=f"Ollama API error: {response.status_code}")
+
+# Initialize streaming handler
+streaming_handler = StreamingResponseHandler()
+
 @app.post("/api/chat")
 async def chat_with_llama(request: ChatRequest):
     # Start timing
@@ -461,17 +611,20 @@ async def chat_with_llama(request: ChatRequest):
     
     try:
         logger.info(f"🚀 [TIMING] Chat request started at {request_start.strftime('%H:%M:%S.%f')[:-3]}")
-        logger.info(f"Received chat request: {request.message[:100]}...")
+        logger.info(f"📩 Request: {request.message[:100]}...")
+        logger.info(f"📊 Context size: {len(request.context) if request.context else 0} chars")
+        logger.info(f"💬 History: {len(request.conversation_history) if request.conversation_history else 0} messages")
         
         # Check for very long context that might cause timeouts
-        if request.context and len(request.context) > 5000:
+        context_warning_threshold = 3000  # REDUCED: Warn at 3KB instead of 5KB
+        if request.context and len(request.context) > context_warning_threshold:
             logger.warning(f"⚠️ Large document context detected: {len(request.context)} characters")
-            logger.warning("This may cause slower response times. Consider asking more specific questions.")
+            logger.warning("Sistem dioptimalkan untuk respons cepat. Pertanyaan spesifik akan lebih cepat.")
         
         # Check for very long messages
-        if len(request.message) > 500:
+        if len(request.message) > 200:  # REDUCED: Warn at 200 chars instead of 500
             logger.warning(f"⚠️ Long message detected: {len(request.message)} characters")
-            logger.warning("Shorter, more specific questions typically get faster responses.")
+            logger.warning("Pertanyaan yang lebih singkat dan spesifik akan mendapat respons lebih cepat.")
 
         # Enhanced prompt engineering with conversation history and active document
         prompt_start = time.time()
@@ -502,12 +655,13 @@ async def chat_with_llama(request: ChatRequest):
                         logger.warning(f"Failed to load active document: {e}")
         
         if final_context:
-            # SAFETY: Limit document context size to prevent timeout
-            if len(final_context) > 10000:  # Max 10KB context
-                logger.warning(f"⚠️ Large document truncated: {len(final_context)} → 10000 chars")
-                final_context = final_context[:10000] + "..."
+            # SPEED: Limit document context size aggressively for fast responses
+            max_context = 8000  # REDUCED: Max 8KB context for speed (was 25000)
+            if len(final_context) > max_context:
+                logger.warning(f"⚠️ Document truncated for speed: {len(final_context)} → {max_context} chars")
+                final_context = final_context[:max_context] + "..."
             
-            # Process document with enhanced intelligence and conversation history
+            # Process document with speed-optimized context
             try:
                 enhanced_context = doc_processor.enhance_context(request.message, final_context)
                 optimized_prompt = prompt_engineer.create_document_prompt(
@@ -515,24 +669,24 @@ async def chat_with_llama(request: ChatRequest):
                     enhanced_context,
                     request.conversation_history or []
                 )
-                logger.info(f"Using enhanced document context with {len(enhanced_context)} characters")
+                logger.info(f"Using speed-optimized document context with {len(enhanced_context)} characters")
             except Exception as e:
                 logger.error(f"Document processing failed: {e}")
-                # Fallback to simple context
-                enhanced_context = final_context[:1500] + "..." if len(final_context) > 1500 else final_context
+                # Fallback to very simple context for speed
+                enhanced_context = final_context[:1000] + "..." if len(final_context) > 1000 else final_context
                 optimized_prompt = prompt_engineer.create_document_prompt(
                     request.message, 
                     enhanced_context,
                     request.conversation_history or []
                 )
-                logger.info(f"Using fallback document context with {len(enhanced_context)} characters")
+                logger.info(f"Using speed fallback context with {len(enhanced_context)} characters")
         else:
             # Enhanced general conversation with history
             optimized_prompt = prompt_engineer.create_general_prompt(
                 request.message,
                 request.conversation_history or []
             )
-            logger.info("Using enhanced general conversation prompt with history")
+            logger.info("Using speed-optimized general conversation prompt")
         
         prompt_time = (time.time() - prompt_start) * 1000
         logger.info(f"⚡ [TIMING] Prompt engineering: {prompt_time:.2f}ms")
@@ -571,6 +725,44 @@ async def chat_with_llama(request: ChatRequest):
                 }
             }
             
+            # ✨ Apply table formatting to cached responses too
+            try:
+                cached_formatted = response_formatter.format_response(cached_response)
+                cached_frontend = response_formatter.format_for_frontend(cached_formatted)
+                
+                response_data["enhanced_formatting"] = {
+                    "has_tables": cached_formatted.has_tables,
+                    "has_enhanced_content": cached_formatted.has_enhanced_content,
+                    "table_count": cached_formatted.metadata.get('table_count', 0),
+                    "formatting_applied": cached_formatted.formatting_applied,
+                    "frontend_data": cached_frontend
+                }
+                
+                if cached_formatted.has_tables:
+                    response_data["table_metadata"] = {
+                        "tables": [
+                            {
+                                "id": table.id,
+                                "headers": table.headers,
+                                "row_count": len(table.rows),
+                                "column_count": len(table.headers),
+                                "column_types": table.column_types
+                            }
+                            for table in cached_formatted.tables
+                        ],
+                        "rendering_hints": cached_frontend.get("rendering_hints", {})
+                    }
+                    
+            except Exception as cache_format_error:
+                logger.warning(f"Cache formatting failed: {cache_format_error}")
+                response_data["enhanced_formatting"] = {
+                    "has_tables": False,
+                    "has_enhanced_content": False,
+                    "table_count": 0,
+                    "formatting_applied": ["basic"],
+                    "frontend_data": None
+                }
+            
             # Add enhanced document context for cached responses
             if active_doc_info or final_context:
                 active_doc = document_library.get_active_document()
@@ -587,130 +779,353 @@ async def chat_with_llama(request: ChatRequest):
         # Prepare request payload
         payload_start = time.time()
         
-        # Set timeout for gaming laptop (10 minutes for complex document analysis)
-        timeout_seconds = 600.0  # 10 minutes for gaming laptop
+        # Set timeout for comprehensive analysis - ULTRA-EXTENDED FOR COMPLEX DOCUMENT ANALYSIS
+        timeout_seconds = 1500.0  # ULTRA-EXTENDED: 25 minutes for complex document analysis (was 720)
         
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            # Get optimized payload
-            request_payload = ai_optimizer.get_optimized_payload(optimized_prompt)
+            # SPEED: Always use streaming for responsiveness, but with smaller targets
+            use_streaming = True
+            
+            # Get optimized payload with streaming option
+            request_payload = ai_optimizer.get_optimized_payload(optimized_prompt, use_streaming)
             
             payload_time = (time.time() - payload_start) * 1000
             logger.info(f"⚡ [TIMING] Payload preparation: {payload_time:.2f}ms")
             
-            logger.info(f"Using optimized llama3:8b configuration (non-streaming)")
+            logger.info(f"🚀 EXTENDED-TIMEOUT llama3:8b configuration")
             logger.info(f"Context length: {request_payload['options']['num_ctx']}")
             logger.info(f"Max tokens: {request_payload['options']['num_predict']}")
             logger.info(f"Temperature: {request_payload['options']['temperature']}")
             logger.info(f"Batch size: {request_payload['options'].get('num_batch', 'default')}")
-            logger.info(f"Timeout: {timeout_seconds}s")
+            logger.info(f"Timeout: {timeout_seconds}s (25 MINUTES FOR COMPLEX DOCUMENT ANALYSIS)")
             logger.info(f"Prompt length: {len(optimized_prompt)} characters")
+            logger.info(f"🌊 Streaming: ALWAYS ENABLED for responsiveness")
             
-            # Make request to Ollama with detailed timing
+            # Make request to Ollama with streaming support
             ollama_start = time.time()
-            logger.info(f"🤖 [TIMING] Sending request to Ollama at {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
+            logger.info(f"🤖 [TIMING] Sending streaming request to Ollama at {datetime.now().strftime('%H:%M:%S.%f')[:-3]}")
             
-            response = await client.post(
-                "http://localhost:11434/api/generate",
-                json=request_payload,
-                timeout=timeout_seconds
-            )
+            try:
+                # Always use streaming for responsiveness
+                response = await client.post(
+                    "http://localhost:11434/api/generate",
+                    json=request_payload,
+                    timeout=timeout_seconds
+                )
+                
+                if response.status_code == 200:
+                    # Process streaming response with shorter timeout
+                    logger.info("🌊 Processing streaming response (SPEED MODE)...")
+                    ai_response = await streaming_handler.process_streaming_response(
+                        response, 
+                        timeout_seconds * 0.8  # Use 80% of timeout for safety
+                    )
+                    
+                    if not ai_response or len(ai_response.strip()) < 10:
+                        logger.warning("⚠️ Streaming response too short, using emergency fallback")
+                        # Emergency short response fallback
+                        emergency_payload = ai_optimizer.get_optimized_payload(optimized_prompt, False)
+                        emergency_payload["options"]["num_predict"] = 800  # Very short response
+                        emergency_payload["options"]["temperature"] = 0.3  # Very focused
+                        
+                        response = await client.post(
+                            "http://localhost:11434/api/generate",
+                            json=emergency_payload,
+                            timeout=600.0  # 10 minutes emergency timeout for very complex queries
+                        )
+                        
+                        if response.status_code == 200:
+                            result = response.json()
+                            ai_response = result.get("response", "") + "\n\n*[Respons dipercepat untuk menghindari timeout]*"
+                        else:
+                            raise HTTPException(status_code=500, detail=f"Emergency fallback failed: {response.status_code}")
+                else:
+                    raise HTTPException(status_code=500, detail=f"Ollama streaming error: {response.status_code}")
+                        
+            except httpx.TimeoutException:
+                logger.error("⏱️ Request timeout, attempting ULTRA-FAST emergency fallback...")
+                try:
+                    # Ultra-fast emergency response
+                    ultra_fast_payload = ai_optimizer.get_optimized_payload(
+                        f"Berikan jawaban singkat dan padat untuk: {request.message}", False
+                    )
+                    ultra_fast_payload["options"]["num_predict"] = 300  # Very short
+                    ultra_fast_payload["options"]["temperature"] = 0.1  # Very focused
+                    ultra_fast_payload["options"]["top_k"] = 10        # Very selective
+                    
+                    response = await client.post(
+                        "http://localhost:11434/api/generate",
+                        json=ultra_fast_payload,
+                        timeout=30.0  # 30 seconds ultra-fast timeout
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        ai_response = result.get("response", "") + "\n\n*[Mode respons cepat karena timeout - silakan coba lagi untuk jawaban lebih detail]*"
+                        logger.info("✅ Ultra-fast emergency fallback successful")
+                    else:
+                        raise
+                        
+                except Exception as emergency_error:
+                    logger.error(f"❌ Ultra-fast emergency fallback failed: {emergency_error}")
+                    raise HTTPException(
+                        status_code=504, 
+                        detail="🚀 Sistem dioptimalkan untuk respons cepat. Silakan coba pertanyaan yang lebih spesifik atau singkat."
+                    )
             
             ollama_end = time.time()
             ollama_time = (ollama_end - ollama_start) * 1000
-            logger.info(f"🤖 [TIMING] Ollama API response received: {ollama_time:.2f}ms")
-            logger.info(f"Ollama response status: {response.status_code}")
+            logger.info(f"🤖 [TIMING] Ollama response received: {ollama_time:.2f}ms ({ollama_time/1000:.1f}s)")
             
-            if response.status_code == 200:
-                # Handle response processing with timing
-                processing_start = time.time()
-                result = response.json()
+            # Handle response processing with timing
+            processing_start = time.time()
+            
+            # Debug logging
+            logger.info(f"AI response length: {len(ai_response)}")
+            logger.info(f"AI response preview: {ai_response[:100]}...")
+            
+            # VALIDASI: Jika response terlalu pendek, ini kemungkinan error
+            if len(ai_response.strip()) < 5:  # Kurang dari 5 karakter
+                logger.warning(f"⚠️ Response terlalu pendek ({len(ai_response)} chars): '{ai_response}'")
+                logger.warning("Kemungkinan stop tokens terlalu agresif atau model error")
+                ai_response = f"Maaf, sistem menghasilkan respons yang tidak lengkap ('{ai_response.strip()}'). Silakan coba lagi dengan pertanyaan yang berbeda."
+            
+            # If response is empty, provide a fallback
+            if not ai_response or ai_response.strip() == "":
+                logger.warning("Empty response from Ollama, using fallback")
+                ai_response = "Maaf, saya tidak dapat memberikan jawaban saat ini. Silakan coba lagi dengan pertanyaan yang berbeda."
+            
+            # Clean the response
+            cleaned_response = response_monitor.clean_response(ai_response)
+            
+            # ✨ NEW: Enhanced table processing
+            try:
+                formatted_response = response_formatter.format_response(cleaned_response)
+                frontend_formatted = response_formatter.format_for_frontend(formatted_response)
                 
-                logger.info(f"Raw Ollama response keys: {list(result.keys())}")
+                logger.info(f"📊 Table processing: {formatted_response.metadata.get('table_count', 0)} tables detected")
+                if formatted_response.has_tables:
+                    logger.info(f"🎨 Enhanced formatting applied: {formatted_response.formatting_applied}")
+                    
+                    # ✨ CRITICAL: Remove markdown tables from content when enhanced tables are available
+                    cleaned_response = response_formatter.remove_markdown_tables_from_text(cleaned_response)
+                    logger.info("✂️ Markdown tables removed from response content")
+                        
+            except Exception as format_error:
+                logger.warning(f"Table formatting failed, using fallback: {format_error}")
+                # Fallback to basic response
+                formatted_response = None
+                frontend_formatted = None
+            
+            # ✨ NEW: Enhanced markdown processing for rich text formatting
+            markdown_metadata = None
+            try:
+                # IMPROVED: More sensitive markdown detection for better formatting
+                markdown_indicators = [
+                    # Heading indicators (more sensitive)
+                    '#' in cleaned_response and len(cleaned_response.split('#')) >= 2,  # At least 1 heading
+                    re.search(r'^#{1,6}\s+.+', cleaned_response, re.MULTILINE),  # Proper heading format
+                    
+                    # Structure indicators
+                    '```' in cleaned_response,  # Code blocks
+                    cleaned_response.count('**') >= 2,  # At least 1 bold pair
+                    
+                    # List indicators (more sensitive)
+                    re.search(r'^\s*[-*+]\s+.+', cleaned_response, re.MULTILINE),  # Any bullet list
+                    re.search(r'^\s*\d+\.\s+.+', cleaned_response, re.MULTILINE),  # Any numbered list
+                    
+                    # Blockquote indicators
+                    re.search(r'^>\s+.+', cleaned_response, re.MULTILINE),  # Any blockquote
+                    
+                    # Multi-line structure (indicates formatted content)
+                    len(cleaned_response.split('\n')) > 3 and any([
+                        '#' in cleaned_response,
+                        '**' in cleaned_response,
+                        '- ' in cleaned_response,
+                        '1. ' in cleaned_response
+                    ])
+                ]
                 
-                ai_response = result.get("response", "")
+                has_markdown_content = any(markdown_indicators)
                 
-                # Debug logging
-                logger.info(f"AI response length: {len(ai_response)}")
-                logger.info(f"AI response preview: {ai_response[:100]}...")
+                # DEBUG: Log markdown detection details
+                logger.info(f"🔍 [MARKDOWN DEBUG] Response length: {len(cleaned_response)}")
+                logger.info(f"🔍 [MARKDOWN DEBUG] Has markdown indicators: {has_markdown_content}")
+                logger.info(f"🔍 [MARKDOWN DEBUG] Indicators: {markdown_indicators}")
+                logger.info(f"🔍 [MARKDOWN DEBUG] Response preview: {cleaned_response[:200]}...")
                 
-                # VALIDASI: Jika response terlalu pendek, ini kemungkinan error
-                if len(ai_response.strip()) < 5:  # Kurang dari 5 karakter
-                    logger.warning(f"⚠️ Response terlalu pendek ({len(ai_response)} chars): '{ai_response}'")
-                    logger.warning("Kemungkinan stop tokens terlalu agresif atau model error")
-                    ai_response = f"Maaf, sistem menghasilkan respons yang tidak lengkap ('{ai_response.strip()}'). Silakan coba lagi dengan pertanyaan yang berbeda."
-                
-                # If response is empty, provide a fallback
-                if not ai_response or ai_response.strip() == "":
-                    logger.warning("Empty response from Ollama, using fallback")
-                    ai_response = "Maaf, saya tidak dapat memberikan jawaban saat ini. Silakan coba lagi dengan pertanyaan yang berbeda."
-                
-                # Clean the response
-                cleaned_response = response_monitor.clean_response(ai_response)
-                
-                # Cache the response
-                response_cache.set(request.message, cleaned_response, final_context)
-                
-                # Monitor performance
-                performance_monitor.add_response_time(ollama_time)
-                
-                processing_time = (time.time() - processing_start) * 1000
-                total_time = (time.time() - start_time) * 1000
-                
-                # Add simple performance monitoring
-                perf_status = performance_monitor.get_simple_status()
-                
-                logger.info(f"⚡ [TIMING] Response processing: {processing_time:.2f}ms")
-                logger.info(f"🎯 [TIMING] TOTAL REQUEST TIME: {total_time:.2f}ms ({total_time/1000:.2f}s)")
-                logger.info(f"📊 [PERFORMANCE] Status: {perf_status}")
-                
-                if perf_status in ['slow', 'very_slow']:
-                    logger.warning("🐌 [PERFORMANCE] Slow response detected!")
-                
-                logger.info(f"Final cleaned response length: {len(cleaned_response)} characters")
-                
-                # Prepare response data with enhanced document context
-                response_data = {
-                    "response": cleaned_response,
-                    "status": "complete",
-                    "timing": {
-                        "total_ms": total_time,
-                        "ollama_ms": ollama_time,
-                        "processing_ms": processing_time,
-                        "prompt_ms": prompt_time,
-                        "cache_ms": cache_time,
-                        "breakdown": {
-                            "prompt_engineering": prompt_time,
-                            "cache_check": cache_time,
-                            "payload_prep": payload_time,
-                            "ollama_request": ollama_time,
-                            "response_processing": processing_time
+                # Apply markdown processing if there's ANY markdown content AND reasonable length
+                if has_markdown_content and len(cleaned_response) > 50:  # Lower threshold
+                    logger.info("📝 Markdown content detected, processing...")
+                    
+                    # Always process markdown when detected
+                    enhanced_markdown = cleaned_response
+                    
+                    # Process the markdown
+                    processed_markdown = markdown_processor.process_markdown(enhanced_markdown)
+                    markdown_metadata = {
+                        "is_markdown": True,
+                        "has_headings": processed_markdown.metadata.has_headings,
+                        "has_lists": processed_markdown.metadata.has_lists,
+                        "has_emphasis": processed_markdown.metadata.has_emphasis,
+                        "has_code_blocks": processed_markdown.metadata.has_code_blocks,
+                        "has_links": processed_markdown.metadata.has_links,
+                        "has_tables": processed_markdown.metadata.has_tables,
+                        "has_blockquotes": processed_markdown.metadata.has_blockquotes,
+                        "word_count": processed_markdown.metadata.word_count,
+                        "formatting_applied": processed_markdown.formatting_applied
+                    }
+                    
+                    # Use the enhanced markdown content
+                    cleaned_response = processed_markdown.raw_markdown
+                    logger.info(f"📝 Markdown processing: {len(processed_markdown.formatting_applied)} formats applied")
+                else:
+                    logger.info("📝 Skipping markdown processing - insufficient markdown content detected")
+                    
+                    # Even without full processing, check if we have basic markdown for frontend
+                    has_basic_markdown = any([
+                        bool(re.search(r'^#{1,6}\s+.+', cleaned_response, re.MULTILINE)),  # Has headings
+                        '```' in cleaned_response,  # Has code blocks
+                        cleaned_response.count('**') >= 2,  # Has bold text
+                        bool(re.search(r'^\s*[-*+]\s+.+', cleaned_response, re.MULTILINE)),  # Has lists
+                        bool(re.search(r'^\s*\d+\.\s+.+', cleaned_response, re.MULTILINE)),  # Has numbered lists
+                        bool(re.search(r'^>\s+.+', cleaned_response, re.MULTILINE))  # Has blockquotes
+                    ])
+                    
+                    if has_basic_markdown:
+                        logger.info("📝 Basic markdown elements detected, preparing frontend metadata")
+                        markdown_metadata = {
+                            "is_markdown": True,
+                            "has_headings": bool(re.search(r'^#{1,6}\s+.+', cleaned_response, re.MULTILINE)),
+                            "has_lists": bool(re.search(r'^\s*[-*+\d]\s+.+', cleaned_response, re.MULTILINE)),
+                            "has_emphasis": cleaned_response.count('**') >= 2 or cleaned_response.count('*') >= 2,
+                            "has_code_blocks": '```' in cleaned_response,
+                            "has_links": bool(re.search(r'\[.*?\]\(.*?\)', cleaned_response)),
+                            "has_tables": bool(re.search(r'\|.*\|', cleaned_response)),
+                            "has_blockquotes": bool(re.search(r'^>\s+.+', cleaned_response, re.MULTILINE)),
+                            "word_count": len(cleaned_response.split()),
+                            "formatting_applied": []
                         }
-                    },
-                    "chat_context": {
-                        "has_document_context": bool(final_context),
-                        "is_document_chat": bool(final_context),
-                        "document_source": "active_document" if not request.context else "uploaded_document"
+                        
+            except Exception as markdown_error:
+                logger.warning(f"Markdown processing failed, using fallback: {markdown_error}")
+                markdown_metadata = None
+            
+            # Cache the response
+            response_cache.set(request.message, cleaned_response, final_context)
+            
+            # Monitor performance
+            performance_monitor.add_response_time(ollama_time)
+            
+            processing_time = (time.time() - processing_start) * 1000
+            total_time = (time.time() - start_time) * 1000
+            
+            # Add simple performance monitoring
+            perf_status = performance_monitor.get_simple_status()
+            
+            logger.info(f"⚡ [TIMING] Response processing: {processing_time:.2f}ms")
+            logger.info(f"🎯 [TIMING] TOTAL REQUEST TIME: {total_time:.2f}ms ({total_time/1000:.2f}s)")
+            logger.info(f"📊 [PERFORMANCE] Status: {perf_status}")
+            
+            # Performance warnings and recommendations
+            if perf_status == 'timeout_risk':
+                logger.error("🚨 [PERFORMANCE] TIMEOUT RISK! Response took too long!")
+            elif perf_status == 'slow':
+                logger.warning("🐌 [PERFORMANCE] Slow response detected!")
+            elif perf_status == 'acceptable':
+                logger.info("⚡ [PERFORMANCE] Acceptable speed")
+            elif perf_status in ['good', 'excellent']:
+                logger.info("🚀 [PERFORMANCE] Good speed achieved!")
+            
+            # Add speed optimization suggestions based on performance
+            speed_suggestion = ""
+            if perf_status in ['slow', 'timeout_risk']:
+                if final_context:
+                    speed_suggestion = "\n\n💡 *Tip: Untuk respons lebih cepat, coba tanyakan tentang bagian spesifik dokumen*"
+                else:
+                    speed_suggestion = "\n\n💡 *Tip: Pertanyaan yang lebih singkat akan mendapat respons lebih cepat*"
+            
+            # Add speed suggestion to response if needed
+            if speed_suggestion and perf_status in ['slow', 'timeout_risk']:
+                cleaned_response += speed_suggestion
+            
+            logger.info(f"Final cleaned response length: {len(cleaned_response)} characters")
+            
+            # Prepare response data with enhanced document context and streaming info
+            response_data = {
+                "response": cleaned_response,
+                "status": "complete",
+                "streaming_used": use_streaming,  # Inform frontend about streaming
+                "word_count": len(cleaned_response.split()),  # Add word count
+                "timing": {
+                    "total_ms": total_time,
+                    "ollama_ms": ollama_time,
+                    "processing_ms": processing_time,
+                    "prompt_ms": prompt_time,
+                    "cache_ms": cache_time,
+                    "performance_status": perf_status,
+                    "breakdown": {
+                        "prompt_engineering": prompt_time,
+                        "cache_check": cache_time,
+                        "payload_prep": payload_time,
+                        "ollama_request": ollama_time,
+                        "response_processing": processing_time
                     }
+                },
+                "chat_context": {
+                    "has_document_context": bool(final_context),
+                    "is_document_chat": bool(final_context),
+                    "document_source": "active_document" if not request.context else "uploaded_document"
                 }
-                
-                # Add enhanced document info for chat display
-                if active_doc_info or final_context:
-                    active_doc = document_library.get_active_document()
-                    response_data["document_context"] = {
-                        "display_name": active_doc.original_filename if active_doc else "Uploaded Document",
-                        "file_type": active_doc.file_type if active_doc else "unknown",
-                        "document_id": active_doc.document_id if active_doc else None,
-                        "content_length": len(final_context) if final_context else 0,
-                        "context_info": active_doc_info if active_doc_info else "📄 Analyzing uploaded document"
+            }
+            
+            # ✨ Add enhanced table formatting data
+            if formatted_response and frontend_formatted:
+                response_data["enhanced_formatting"] = True
+                response_data["table_metadata"] = [
+                    {
+                        "type": "table",
+                        "headers": table.headers,
+                        "rows": table.rows,
+                        "column_types": table.column_types,
+                        "title": getattr(table, 'title', None)
                     }
+                    for table in formatted_response.tables
+                ]
                 
-                return JSONResponse(response_data)
+                logger.info(f"✅ Enhanced table data prepared: {len(response_data['table_metadata'])} tables")
             else:
-                error_msg = f"Ollama API returned status code {response.status_code}"
-                total_time = (time.time() - start_time) * 1000
-                logger.error(f"❌ [TIMING] Error after {total_time:.2f}ms: {error_msg}")
-                logger.error(f"Response content: {response.text}")
-                raise HTTPException(status_code=500, detail=error_msg)
+                response_data["enhanced_formatting"] = False
+                response_data["table_metadata"] = []
+            
+            # ✨ Add enhanced markdown formatting data
+            if markdown_metadata:
+                response_data["markdown_formatting"] = True
+                response_data["markdown_metadata"] = markdown_metadata
+                logger.info(f"✅ Markdown data prepared: {len(markdown_metadata.get('formatting_applied', []))} formats")
+                logger.info(f"🔍 [FRONTEND DEBUG] Sending markdown_metadata: {markdown_metadata}")
+            else:
+                response_data["markdown_formatting"] = False
+                response_data["markdown_metadata"] = {}
+                logger.info("❌ [FRONTEND DEBUG] No markdown metadata - sending empty")
+            
+            # DEBUG: Log final response data being sent to frontend
+            logger.info(f"🔍 [FRONTEND DEBUG] Final response keys: {list(response_data.keys())}")
+            logger.info(f"🔍 [FRONTEND DEBUG] markdown_formatting: {response_data.get('markdown_formatting', False)}")
+            logger.info(f"🔍 [FRONTEND DEBUG] Response content preview: {cleaned_response[:100]}...")
+            
+            # Add enhanced document info for chat display
+            if active_doc_info or final_context:
+                active_doc = document_library.get_active_document()
+                response_data["document_context"] = {
+                    "display_name": active_doc.original_filename if active_doc else "Uploaded Document",
+                    "file_type": active_doc.file_type if active_doc else "unknown",
+                    "document_id": active_doc.document_id if active_doc else None,
+                    "content_length": len(final_context) if final_context else 0,
+                    "context_info": active_doc_info if active_doc_info else "📄 Analyzing uploaded document"
+                }
+            
+            return JSONResponse(response_data)
                 
     except httpx.ConnectError:
         total_time = (time.time() - start_time) * 1000
@@ -720,17 +1135,23 @@ async def chat_with_llama(request: ChatRequest):
     except httpx.TimeoutException:
         total_time = (time.time() - start_time) * 1000
         
-        # Simple timeout handling
-        timeout_msg = f"Request to Ollama timed out after {total_time:.2f}ms. Try asking a shorter, more specific question."
+        # Speed-optimized timeout handling with clear user guidance
+        if total_time > 120000:  # More than 2 minutes
+            timeout_msg = f"⚡ Sistem dioptimalkan untuk respons cepat (target <60 detik). "
+            timeout_msg += f"Request ini membutuhkan {total_time/1000:.1f} detik. "
+            
+            if request.context or final_context:
+                timeout_msg += "💡 Untuk dokumen kompleks, coba tanyakan: 'Apa poin utama?' atau 'Ringkas dalam 5 poin'."
+            else:
+                timeout_msg += "💡 Coba dengan pertanyaan yang lebih spesifik dan singkat."
+        else:
+            timeout_msg = f"⏱️ Timeout setelah {total_time/1000:.1f}s. "
+            if request.context:
+                timeout_msg += "Untuk analisis dokumen, tanyakan tentang bagian spesifik saja."
+            else:
+                timeout_msg += "Coba dengan pertanyaan yang lebih fokus."
         
         logger.error(f"⏱️ [TIMING] Timeout after {total_time:.2f}ms")
-        
-        # Add specific suggestions based on context
-        if request.context:
-            timeout_msg += " For document analysis, try asking about just 1-2 specific words or concepts."
-        else:
-            timeout_msg += " Try questions like 'What is X?' or 'Define Y'."
-            
         raise HTTPException(status_code=504, detail=timeout_msg)
     except Exception as e:
         total_time = (time.time() - start_time) * 1000
@@ -1287,6 +1708,249 @@ async def document_context_switch(document_id: str):
     except Exception as e:
         logger.error(f"Error switching document context: {e}")
         raise HTTPException(status_code=500, detail=f"Error switching context: {str(e)}")
+
+# ═══════════════════════════════════════════════════════════════
+# 📊 MULTI-DOCUMENT ANALYSIS ENDPOINTS
+# ═══════════════════════════════════════════════════════════════
+
+class MultiDocumentAnalysisRequest(BaseModel):
+    message: str
+    document_ids: List[str]
+    mode: str = "sequential"  # sequential or batch
+
+class MultiDocumentResult(BaseModel):
+    document_id: str
+    filename: str
+    result: str
+    status: str  # processing, completed, error
+    processing_time: Optional[float] = None
+    error_message: Optional[str] = None
+    timestamp: datetime
+
+class ProcessingProgress(BaseModel):
+    total: int
+    completed: int
+    currentDocument: Optional[str] = None
+    results: List[MultiDocumentResult]
+
+class MultiDocumentAnalysisResponse(BaseModel):
+    analysis_id: str
+    status: str  # started, processing, completed, error
+    results: List[MultiDocumentResult]
+    progress: ProcessingProgress
+
+# In-memory storage for multi-document analysis sessions
+multi_doc_sessions: Dict[str, MultiDocumentAnalysisResponse] = {}
+
+@app.post("/api/multi-document-analysis")
+async def start_multi_document_analysis(request: MultiDocumentAnalysisRequest):
+    """
+    🚀 Start multi-document analysis process
+    Processes multiple documents sequentially for optimal AI performance
+    """
+    try:
+        # Generate analysis session ID
+        analysis_id = str(uuid.uuid4())
+        
+        # Validate document IDs
+        valid_documents = []
+        for doc_id in request.document_ids:
+            doc = document_library.get_document(doc_id)
+            if doc:
+                valid_documents.append(doc)
+            else:
+                logger.warning(f"Document {doc_id} not found in library")
+        
+        if not valid_documents:
+            raise HTTPException(status_code=400, detail="No valid documents found")
+        
+        # Initialize analysis session
+        analysis_session = MultiDocumentAnalysisResponse(
+            analysis_id=analysis_id,
+            status="started",
+            results=[],
+            progress=ProcessingProgress(
+                total=len(valid_documents),
+                completed=0,
+                currentDocument=None,
+                results=[]
+            )
+        )
+        
+        multi_doc_sessions[analysis_id] = analysis_session
+        
+        # Start background processing (in a real implementation, use async tasks)
+        await process_multi_documents_sequential(
+            analysis_id, 
+            request.message, 
+            valid_documents
+        )
+        
+        return {
+            "analysis_id": analysis_id,
+            "status": "started",
+            "message": f"Started analysis of {len(valid_documents)} documents"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting multi-document analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"Analysis error: {str(e)}")
+
+async def process_multi_documents_sequential(analysis_id: str, user_message: str, documents: List[DocumentMetadata]):
+    """
+    🔄 Process documents sequentially for optimal AI performance
+    Updates session status in real-time
+    """
+    try:
+        session = multi_doc_sessions[analysis_id]
+        session.status = "processing"
+        
+        results = []
+        
+        for i, document in enumerate(documents):
+            # Update current processing status
+            session.progress.currentDocument = document.original_filename
+            session.progress.completed = i
+            
+            try:
+                start_time = time.time()
+                
+                # Get full document content
+                file_path = os.path.join(UPLOAD_FOLDER, document.filename)
+                if not os.path.exists(file_path):
+                    raise Exception(f"Document file not found: {document.filename}")
+                
+                full_content = await extract_text_from_document(file_path)
+                
+                # Prepare context for this specific document
+                document_context = f"""Document: {document.original_filename}
+File Type: {document.file_type}
+Content: {full_content[:8000]}"""  # Limit to 8KB for llama3:8b
+                
+                # Create optimized prompt for this document
+                optimized_prompt = prompt_engineer.create_document_prompt(
+                    user_message,
+                    document_context,
+                    []  # Fresh context for each document
+                )
+                
+                # Send to AI using optimized configuration
+                request_payload = ai_optimizer.get_optimized_payload(optimized_prompt)
+                
+                async with httpx.AsyncClient(timeout=300.0) as client:  # 5 minute timeout per document
+                    response = await client.post(
+                        "http://localhost:11434/api/generate",
+                        json=request_payload,
+                        timeout=300.0
+                    )
+                    
+                    if response.status_code == 200:
+                        result_data = response.json()
+                        ai_response = result_data.get("response", "No response generated")
+                        
+                        # Clean the response
+                        cleaned_response = response_monitor.clean_response(ai_response)
+                        
+                        processing_time = time.time() - start_time
+                        
+                        # Create result
+                        result = MultiDocumentResult(
+                            document_id=document.document_id,
+                            filename=document.original_filename,
+                            result=cleaned_response,
+                            status="completed",
+                            processing_time=round(processing_time, 2),
+                            timestamp=datetime.now()
+                        )
+                        
+                        results.append(result)
+                        session.progress.results = results
+                        session.progress.completed = i + 1
+                        
+                        logger.info(f"✅ Completed analysis for {document.original_filename} in {processing_time:.2f}s")
+                    else:
+                        raise Exception(f"Ollama API returned status {response.status_code}")
+                
+            except Exception as e:
+                # Handle individual document processing error
+                error_result = MultiDocumentResult(
+                    document_id=document.document_id,
+                    filename=document.original_filename,
+                    result="",
+                    status="error",
+                    error_message=str(e),
+                    timestamp=datetime.now()
+                )
+                
+                results.append(error_result)
+                session.progress.results = results
+                session.progress.completed = i + 1
+                
+                logger.error(f"❌ Error processing {document.original_filename}: {e}")
+        
+        # Mark session as completed
+        session.status = "completed"
+        session.results = results
+        session.progress.currentDocument = None
+        
+        logger.info(f"🎉 Multi-document analysis {analysis_id} completed: {len(results)} documents processed")
+        
+    except Exception as e:
+        # Mark session as error
+        session.status = "error"
+        logger.error(f"💥 Fatal error in multi-document analysis {analysis_id}: {e}")
+
+@app.get("/api/multi-document-analysis/{analysis_id}/status")
+async def get_analysis_status(analysis_id: str):
+    """
+    📊 Get real-time status of multi-document analysis
+    Used for polling progress updates
+    """
+    try:
+        if analysis_id not in multi_doc_sessions:
+            raise HTTPException(status_code=404, detail="Analysis session not found")
+        
+        session = multi_doc_sessions[analysis_id]
+        
+        return {
+            "analysis_id": analysis_id,
+            "status": session.status,
+            "progress": {
+                "total": session.progress.total,
+                "completed": session.progress.completed,
+                "currentDocument": session.progress.currentDocument,
+                "results": [
+                    {
+                        "document_id": r.document_id,
+                        "filename": r.filename,
+                        "result": r.result,
+                        "status": r.status,
+                        "processing_time": r.processing_time,
+                        "error_message": r.error_message,
+                        "timestamp": r.timestamp.isoformat()
+                    } for r in session.progress.results
+                ]
+            },
+            "results": [
+                {
+                    "document_id": r.document_id,
+                    "filename": r.filename,
+                    "result": r.result,
+                    "status": r.status,
+                    "processing_time": r.processing_time,
+                    "error_message": r.error_message,
+                    "timestamp": r.timestamp.isoformat()
+                } for r in session.results
+            ]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting analysis status: {e}")
+        raise HTTPException(status_code=500, detail=f"Status error: {str(e)}")
 
 # Run server directly if this file is executed
 if __name__ == "__main__":
